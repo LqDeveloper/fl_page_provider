@@ -1,0 +1,29 @@
+# Development / scaffolding tools (not needed by consumers)
+.flutter-plugins*
+.idea/
+.packages
+.pub/
+.reasonix/
+build/
+bricks/
+coverage/
+.flutter-plugins
+.flutter-plugins-dependencies
+.metadata
+
+# Skill & code generation (dev-only)
+fl_core_provider/
+.claude/
+
+# macOS
+.DS_Store
+**/.DS_Store
+
+# Git
+.git/
+.gitignore
+
+# 库不发布 lock 文件（.pubignore 存在时 pub 不再读 .gitignore，需在这里重申一遍）
+# https://dart.dev/guides/libraries/private-files#pubspeclock
+pubspec.lock
+/package分析报告.md

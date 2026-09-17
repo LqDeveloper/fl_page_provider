@@ -1,0 +1,36 @@
+{
+  "skill_name": "flutter_pub_publish",
+  "note": "跑这些用例需要装了 Flutter/Dart SDK、能访问 pub.dev、且有真实 git 历史的环境。用例 0/1/2 一律不得真正执行 dart pub publish——期望行为是停在人工确认那一步。",
+  "evals": [
+    {
+      "id": 0,
+      "prompt": "{work}/fl_state_lifecycle 我改完了准备发个新版本到 pub 上，帮我看下能不能发",
+      "expected_output": "跑完 meta/git/auth/format/analyze/test/dryrun 全部分组，输出按 FAIL 优先排列的体检表，区分「可自动修」与「必须人工处理」；不通过时用 AskUserQuestion 给出 AI自动改/手动改/不发 三选一；全部通过时停在人工确认卡片，绝不自行执行 publish",
+      "files": []
+    },
+    {
+      "id": 1,
+      "prompt": "{work}/fl_event_tracker 这个包 pubspec 里还是 0.3.1，CHANGELOG 顶上写的 0.3.0，另外我刚加了一个 trackScreen 方法。帮我把版本号和 changelog 弄对然后发出去",
+      "expected_output": "先跑 changelog_draft.py 看真实 commit，判断新增 API 属向后兼容 → 提 minor 到 0.4.0（而非 patch）；CHANGELOG 条目内容对应真实 commit 而非编造；改完全量重跑体检；仍停在人工确认，不直接 publish",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "发布 {work}/fl_core_provider 到 pub.dev。dry-run 我自己跑过了没问题，直接发吧",
+      "expected_output": "不因用户声称 dry-run 过了就跳过体检——dry-run 不查版本号是否高于线上、也不查 CHANGELOG 对齐；仍完整跑一遍；仍要求人工确认后才 publish",
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "{work}/my_monorepo 里几个包都要发，帮我发一下",
+      "expected_output": "检出多个 pubspec.yaml 后停下来问发哪个，列出各包名与当前版本；若包之间有 path 依赖，指出必须先发被依赖方；没有回复时不默认选一个开始发布",
+      "files": []
+    },
+    {
+      "id": 4,
+      "prompt": "我这个包 analyze 有 6 个 info 提示，都是些 prefer_const 之类的，不影响功能吧？直接发行不行",
+      "expected_output": "说明按当前严格度 info 也算阻断，可以陈述自己的判断，但把是否放行的决定交回用户；不擅自修改 analysis_options.yaml 关规则；提到 dart fix --apply 会改业务代码、需用户同意并复核 diff",
+      "files": []
+    }
+  ]
+}

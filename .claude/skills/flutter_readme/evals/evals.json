@@ -1,0 +1,23 @@
+{
+  "skill_name": "flutter_readme",
+  "evals": [
+    {
+      "id": 0,
+      "prompt": "帮我给 fl_core_provider 这个包写一份 README，中英文各一份。它是我自己写的状态管理封装，对外导出的每个类怎么用都要讲清楚，还要有依赖说明。包在 {work}/fl_core_provider",
+      "expected_output": "README.md + README_zh.md 两份对齐的文档，覆盖全部导出类，依赖章节含 provider/meta/fl_state_lifecycle，示例代码符号真实存在",
+      "files": []
+    },
+    {
+      "id": 1,
+      "prompt": "{work}/fl_state_lifecycle 准备发 pub 了。现在的 README 是我随手写的英文版，又长又乱而且没有中文。重写一份规范的，中英双语，版本要求和平台支持也标上。",
+      "expected_output": "覆盖旧 README，产出结构清晰的双语文档，版本/平台照 pubspec，篇幅收敛",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "{work}/fl_state_lifecycle/packages/fl_event_tracker 这个埋点包一直没文档，同事接入都来问我。帮我出一份中英文 README，每个 API 都要有能直接跑的例子和注意事项。",
+      "expected_output": "为嵌套子包（而非外层包）生成双语 README，示例基于真实 API",
+      "files": []
+    }
+  ]
+}

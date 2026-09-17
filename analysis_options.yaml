@@ -1,0 +1,14 @@
+include: package:flutter_lints/flutter.yaml
+
+# 这五条是 Dart linter 的正式规则，但 flutter_lints 默认不启用，
+# 而它们恰好覆盖资源泄漏与异步失控。现有代码本来就满足，开着是防回归。
+linter:
+  rules:
+    - cancel_subscriptions   # 订阅活得比宿主久
+    - close_sinks            # sink/controller 没关
+    - discarded_futures      # Future 被丢弃，异常逃逸
+    - unawaited_futures      # 异步上下文里漏写 await
+    - avoid_void_async       # 调用方无法 await、无法 catch
+
+# Additional information about this file can be found at
+# https://dart.dev/guides/language/analysis-options

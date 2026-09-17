@@ -1,0 +1,26 @@
+{
+  "skill_name": "fl-page-lifecycle",
+  "evals": [
+    {
+      "id": 0,
+      "name": "video-pause-on-leave",
+      "prompt": "我们 App 有个视频详情页 VideoDetailPage，现在的问题是：用户点进另一个页面之后视频还在后台响，还有就是页面上弹分享 dialog 的时候视频也不停。我在 pubspec 里已经加了 fl_page_lifecycle 这个包了。帮我把 VideoDetailPage 改好，播放器用的是 video_player 的 VideoPlayerController。要求用户自己手动暂停过的话，回到页面别给他自动续播。写成完整的 dart 文件给我，另外告诉我 main.dart 里要不要动。",
+      "expected_output": "一个完整的 VideoDetailPage dart 文件：混入 FlPageLifecycleMixin，onPageResume 起播、onPagePause 暂停并记录 _wasPlaying 以尊重手动暂停，player 在 dispose 里释放；明确指出 main.dart 必须注册 FlRouteObserver.instance 到 navigatorObservers；说明为什么用 resume/pause 而不是 start/stop（dialog 只发 pause）；不使用 isCurrent 判可见性。",
+      "files": []
+    },
+    {
+      "id": 1,
+      "name": "tabbar-lazy-load-and-tracking",
+      "prompt": "首页是个 TabBarView，三个 tab：推荐、关注、我的。现在三个 tab 的接口在进首页的瞬间全都请求了，想改成划到哪个 tab 才请求那个 tab 的数据，之后再划回来不要重复请求。另外产品要每个 tab 的曝光次数和停留时长埋点。项目里用的是 fl_page_lifecycle。给我 HomePage 和其中一个 tab（RecommendTab）的完整代码。",
+      "expected_output": "HomePage 用 FlPageIndexScope.wrapChildren 包裹 TabBarView 的 children 并传 TabController；RecommendTab 混入 FlPageLifecycleMixin 且 observePageIndex => true（两步都做到），onPageStart 里用 _loaded 标志只首次加载，埋点用 onPageStart/onPageStop 配对算停留时长（而不是 resume/pause），TabController 正确 dispose。",
+      "files": []
+    },
+    {
+      "id": 2,
+      "name": "fix-broken-routeaware-gorouter",
+      "prompt": "我这个页面的可见性判断一直有 bug，帮我看看怎么改。项目路由用的 go_router，有个 ShellRoute 包了底部导航。页面代码大概是这样：\n\nclass _OrderListPageState extends State<OrderListPage> with RouteAware {\n  Timer? _timer;\n\n  @override\n  void didChangeDependencies() {\n    super.didChangeDependencies();\n    routeObserver.subscribe(this, ModalRoute.of(context)!);\n  }\n\n  @override\n  void didPopNext() {\n    if (ModalRoute.of(context)!.isCurrent) _startPolling();\n  }\n\n  @override\n  void didPushNext() => _timer?.cancel();\n\n  void _startPolling() {\n    _timer = Timer.periodic(const Duration(seconds: 10), (_) => _fetch());\n  }\n}\n\n现在的毛病：1) 弹个筛选 bottomSheet 出来轮询就停了，其实用户还在这个页面上；2) 下单成功后我调 pushAndRemoveUntil 回订单列表，有时候会起两个定时器；3) App 切后台定时器还在跑。我想换成 fl_page_lifecycle，怎么改？",
+      "expected_output": "改成 FlPageLifecycleMixin：onPageResume 起轮询、onPagePause 停轮询（bottomSheet 只发 pause 所以问题 1 自然消失）；解释 pushAndRemoveUntil 的重复定时器是因为朴素 RouteAware 会给仍被覆盖的路由发 didPop，而 FlRouteObserver 用 previousRoute.isCurrent 抑制了误发，且事件幂等；开 observeAppLifecycle => true 加 onAppBackground/onAppForeground 处理问题 3；关键点是必须在 go_router 的根 observers 和 ShellRoute 的 observers 上都注册 FlRouteObserver.instance；不再使用 isCurrent 判可见性。",
+      "files": []
+    }
+  ]
+}

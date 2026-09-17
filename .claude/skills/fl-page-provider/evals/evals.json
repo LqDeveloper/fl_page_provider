@@ -1,0 +1,26 @@
+{
+  "skill_name": "fl-page-provider",
+  "evals": [
+    {
+      "id": 0,
+      "name": "new-page-multi-id",
+      "prompt": "在 lib/pages 下给我加一个订单详情页 order_detail，头部的收货地址、中间的商品列表、底部的合计金额要能各自单独刷新，别一改就整页重建。页面在 tab 里，切走再切回来要保住滚动位置。",
+      "expected_output": "生成 OrderDetailPage/OrderDetailController/OrderDetailEvent 三件套；FlBasePageState + wantKeepAlive；三个 ID 全在 shouldNotifyIds；三块各用 FlSelector 订阅自己的 ID；onPageInit 调 super",
+      "files": []
+    },
+    {
+      "id": 1,
+      "name": "fix-full-page-rebuild",
+      "prompt": "这个页面点一下加号整页都在闪，连顶上的 AppBar 和那张封面图都重建了。帮我改成只刷新计数那一行。",
+      "expected_output": "把 context.wc 换成 FlSelector/selectIds 只订阅计数 ID；按钮回调改用 rc；不变的部分摘到 child；不引入 provider 包的 read/watch/select",
+      "files": ["fixtures/counter_page.dart"]
+    },
+    {
+      "id": 2,
+      "name": "pageview-tabs-lifecycle",
+      "prompt": "首页底部四个 tab 用 PageView 实现，每个 tab 是一个独立页面，各自有自己的 Controller。要求切到别的 tab 时那一页的轮询停掉、切回来继续，弹筛选面板的时候轮询不能断。帮我接一下。",
+      "expected_output": "宿主用 FlPageIndexScope.wrapChildren 包裹；子页 observePageIndex => true；轮询放 onPageStart/onPageStop 而不是 resume/pause；提到根 Navigator 要注册 FlRouteObserver",
+      "files": []
+    }
+  ]
+}

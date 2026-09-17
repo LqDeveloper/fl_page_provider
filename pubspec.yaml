@@ -1,0 +1,31 @@
+name: fl_page_provider
+description: "Page-scoped controllers with lifecycle callbacks and ID-granular rebuilds: the controller lives and dies with the page, and only widgets registered for the notified ID rebuild."
+version: 0.0.1
+homepage: https://github.com/LqDeveloper/fl_page_provider
+repository: https://github.com/LqDeveloper/fl_page_provider
+
+environment:
+  sdk: ^3.11.5
+  flutter: ">=3.41.9"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  meta: ^1.17.0
+  fl_page_lifecycle: ^0.0.3
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+  #dart pub run import_sorter:main
+  import_sorter: ^4.6.0
+
+flutter:
+
+import_sorter:
+  emojis: false # Optional, defaults to false
+  comments: false # Optional, defaults to true
+  ignored_files: # Optional, defaults to []
+    - \/lib\/fl_core_provider.dart

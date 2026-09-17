@@ -1,0 +1,26 @@
+{
+  "skill_name": "analyze-flutter",
+  "evals": [
+    {
+      "id": 0,
+      "name": "full-audit-messy-package",
+      "prompt": "帮我分析一下 <PKG> 这个 flutter package 的代码质量，从开发规范、内存、UI 卡顿、代码精简、扩展解耦几个角度看看，出一份报告。",
+      "expected_output": "package分析报告.md，按 P0-P3 排序，命中主要真实问题，无捏造，未修改源码",
+      "files": ["fixtures/smart_gallery"]
+    },
+    {
+      "id": 1,
+      "name": "memory-lag-focused",
+      "prompt": "我这个 flutter package 在 <PKG>，用户反馈页面来回进出之后内存一直涨，列表滑动也有点卡。帮我从 lib 里找找原因，别改代码，给我一份能直接分给同事去改的文档。",
+      "expected_output": "package分析报告.md，P0 集中在未释放资源与主线程阻塞，给出可执行改造方案与风险难度",
+      "files": ["fixtures/smart_gallery"]
+    },
+    {
+      "id": 2,
+      "name": "clean-package-calibration",
+      "prompt": "review 一下 <PKG> 这个 package 的质量，重点是内存泄漏和性能，生成分析报告。",
+      "expected_output": "报告如实反映该 package 质量良好：不捏造 P0 内存泄漏，正确识别 controller 归属，明确写出检查记录",
+      "files": ["fixtures/tidy_chips"]
+    }
+  ]
+}
