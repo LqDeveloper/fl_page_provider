@@ -11,11 +11,22 @@ import '../base_page_controller.dart';
 /// 值得动手确认的几件事：
 ///
 /// - `read` 探针永远停在 1，读到的值一直是第一次构建时的快照——它没建立依赖；
-/// - `selectIds([a])` 只在通知 A 时跳；通知 C 时全场只有 `watch` 探针跳；
+/// - `FlSelector(ids: [a])` 只在通知 A 时跳；通知 C 时全场只有「列了全部 ID」的
+///   那个探针跳；
 /// - 「同帧连发 A×3」只让计数 +1，三次通知在元素侧被合并成一次重建；
 /// - 「在 build 中通知 A」不会抛 `setState during build`，重建推迟到下一帧；
 /// - 动态探针从关心 A 改成关心 B 之后，再通知 A 它**立刻**不再跳——登记表在
 ///   重新登记时就被清空了，不管这次重建是谁触发的。
+///
+/// 最后一块摆的不是重建而是**所有权**——控制器归
+/// `FlInheritedElement`，不归任何 Widget（与 `provider` 把值挂在
+/// `_InheritedProviderScopeElement` 上是同一个分工）：
+///
+/// - 「父级 setState」按多少次，`create` 的调用次数都停在 1，控制器还是同一个
+///   实例——Element 本就是跨重建活着的那个对象；
+/// - 卸掉那一小块子树，控制器立刻 `dispose`；重新挂载拿到的是一个**新**实例；
+/// - 同类型嵌套时，内层 `create` 里的 `rc<LabController>()` 拿到的是**外层**那个
+///   实例，不是正在创建中的自己。
 ///
 /// 页面上除动态探针外的卡片都是 `const`：页面自身 `setState` 时它们是同一个
 /// Widget 实例，子树被整棵跳过，计数不会被无关的重建污染。
@@ -65,27 +76,27 @@ class _ProviderLabPageState
           ),
           const _Probe(
             id: 'watch',
-            title: 'context.wc()',
-            subtitle: '全量依赖 —— 每一次通知都跳，不分 ID',
+            title: 'FlSelector(ids: LabId.values)',
+            subtitle: '把所有 ID 都列进来 —— 每一次通知都跳，等价于已移除的 wc',
             mode: _ProbeMode.watch,
           ),
           const _Probe(
             id: 'sel-a',
-            title: 'context.selectIds([a])',
+            title: 'FlSelector(ids: [a])',
             subtitle: '只认 A',
             mode: _ProbeMode.select,
             ids: <LabId>[LabId.a],
           ),
           const _Probe(
             id: 'sel-b',
-            title: 'context.selectIds([b])',
+            title: 'FlSelector(ids: [b])',
             subtitle: '只认 B',
             mode: _ProbeMode.select,
             ids: <LabId>[LabId.b],
           ),
           const _Probe(
             id: 'sel-ab',
-            title: 'context.selectIds([a, b])',
+            title: 'FlSelector(ids: [a, b])',
             subtitle: 'A 或 B 任一变化都跳；A+B 同时推进也只跳一次',
             mode: _ProbeMode.select,
             ids: <LabId>[LabId.a, LabId.b],
@@ -98,6 +109,12 @@ class _ProviderLabPageState
           const _SectionTitle('FlSelector 的 child'),
           const SizedBox(height: 8),
           const _ChildHoistDemo(),
+          const SizedBox(height: 20),
+          const _SectionTitle('控制器的生死'),
+          const SizedBox(height: 8),
+          const _OwnershipDemo(),
+          const SizedBox(height: 12),
+          _NestedCreateDemo(outer: controller),
         ],
       ),
     );
@@ -193,13 +210,23 @@ class _ProbeState extends State<_Probe> {
 
   @override
   Widget build(BuildContext context) {
-    _builds++;
-    final LabController c = switch (widget.mode) {
-      _ProbeMode.read => context.rc<LabController>(),
-      _ProbeMode.watch => context.wc<LabController>(),
-      _ProbeMode.select => context.selectIds<LabId, LabController>(widget.ids),
-    };
+    // rc 不建立依赖，没有要圈的重建边界，直接读。
+    if (widget.mode == _ProbeMode.read) {
+      _builds++;
+      return _card(context, context.rc<LabController>());
+    }
+    // 其余两档都经 FlSelector——它是按 ID 订阅的唯一公开入口。`watch` 这一档
+    // 原先用的 `context.wc` 已移除，把所有 ID 列进来与它完全等价。
+    return FlSelector<LabId, LabController>(
+      ids: widget.mode == _ProbeMode.watch ? LabId.values : widget.ids,
+      builder: (BuildContext context, LabController c, _) {
+        _builds++;
+        return _card(context, c);
+      },
+    );
+  }
 
+  Widget _card(BuildContext context, LabController c) {
     final ThemeData theme = Theme.of(context);
     final bool frozen = widget.mode == _ProbeMode.read;
 
@@ -348,7 +375,7 @@ class _DynamicProbeSectionState extends State<_DynamicProbeSection> {
         const SizedBox(height: 4),
         _Probe(
           id: 'sel-dynamic',
-          title: 'context.selectIds([${_watched.name}])',
+          title: 'FlSelector(ids: [${_watched.name}])',
           subtitle: '登记表随 ids 变化整表重来，旧 ID 不会多活一轮',
           mode: _ProbeMode.select,
           ids: <LabId>[_watched],
@@ -420,6 +447,307 @@ class _ChildHoistDemoState extends State<_ChildHoistDemo> {
           },
         ),
       ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 控制器的生死：所有权在 FlInheritedElement 上
+// ---------------------------------------------------------------------------
+
+/// 只为这一块存在的控制器：把自己被释放这件事报给外面。
+class OwnedController extends BasePageController<LabId> {
+  OwnedController({required this.onDisposed});
+
+  /// 由 [_OwnershipDemo] 传进来，用于把「我被 dispose 了」显示到屏幕上。
+  final VoidCallback onDisposed;
+
+  @override
+  List<LabId> get shouldNotifyIds => const <LabId>[LabId.a];
+
+  @override
+  void dispose() {
+    onDisposed();
+    super.dispose();
+  }
+}
+
+/// 计数记在这个对象上，而不是 `State` 的字段上。
+///
+/// 卡片要读的是 `create` 跑完之后的数字，而 `create` 属于**子树**的构建，晚于
+/// `_OwnershipDemo.build`。记在外面的对象上，卡片（构建更晚）就能读到当帧的值。
+class _OwnershipLog {
+  /// `create` 被调用过几次。父级怎么重建都不该让它动。
+  int creates = 0;
+
+  /// 控制器被 `dispose` 过几次。
+  int disposes = 0;
+
+  /// `_OwnershipDemo` 自己被 build 过几次，用来和 [creates] 对照。
+  int parentBuilds = 0;
+
+  /// 最近一次创建出来的实例的 `hashCode`，换了实例这个数就会变。
+  int? lastHash;
+}
+
+/// 把「控制器归 Element」摆到屏幕上：父级反复重建不重造，子树一卸载就释放。
+class _OwnershipDemo extends StatefulWidget {
+  const _OwnershipDemo();
+
+  @override
+  State<_OwnershipDemo> createState() => _OwnershipDemoState();
+}
+
+class _OwnershipDemoState extends State<_OwnershipDemo> {
+  final _OwnershipLog _log = _OwnershipLog();
+
+  /// 那一小块子树还挂着吗。
+  bool _attached = true;
+
+  void _handleDisposed() {
+    _log.disposes++;
+    // dispose 发生在 Element 树被锁住的卸载阶段，此刻 setState 会抛
+    // 「called when widget tree was locked」。所以只记数，把刷新推到下一帧。
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) setState(() {});
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    _log.parentBuilds++;
+    final ThemeData theme = Theme.of(context);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        Text(
+          '控制器归 FlInheritedElement，不归任何 Widget：父级怎么重建都不重造，'
+          '子树一卸载就 dispose。',
+          style: theme.textTheme.bodySmall?.copyWith(
+            color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
+            height: 1.5,
+          ),
+        ),
+        const SizedBox(height: 8),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: <Widget>[
+            _Btn('父级 setState', () => setState(() {})),
+            _Btn(
+              _attached ? '卸载这一小块' : '重新挂载',
+              () => setState(() => _attached = !_attached),
+            ),
+          ],
+        ),
+        const SizedBox(height: 4),
+        if (_attached)
+          FlProviderBuilder<OwnedController>(
+            create: (_) {
+              _log.creates++;
+              final OwnedController controller = OwnedController(
+                onDisposed: _handleDisposed,
+              );
+              _log.lastHash = controller.hashCode;
+              return controller;
+            },
+            // 卡片放在 builder 里：它构建于 create 之后，读到的是当帧的计数。
+            builder: (_, _) => _OwnershipCard(log: _log, alive: true),
+          )
+        else
+          _OwnershipCard(log: _log, alive: false),
+      ],
+    );
+  }
+}
+
+class _OwnershipCard extends StatelessWidget {
+  const _OwnershipCard({required this.log, required this.alive});
+
+  final _OwnershipLog log;
+
+  /// 子树还挂着（控制器还活着）。
+  final bool alive;
+
+  @override
+  Widget build(BuildContext context) {
+    final int? hash = log.lastHash;
+    return Card(
+      elevation: 0,
+      margin: const EdgeInsets.symmetric(vertical: 4),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(
+          color: Theme.of(context).dividerColor.withValues(alpha: 0.3),
+        ),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            _StatRow(
+              label: 'create 调用次数',
+              value: '${log.creates}',
+              valueKey: 'own:creates',
+              hint: '父级已重建 ${log.parentBuilds} 次',
+              hintKey: 'own:parent',
+            ),
+            _StatRow(
+              label: '控制器实例',
+              value: hash == null ? '—' : '#${hash.toRadixString(16)}',
+              valueKey: 'own:identity',
+              hint: alive ? '还活着' : '已 dispose',
+            ),
+            _StatRow(
+              label: 'dispose 已触发',
+              value: '${log.disposes}',
+              valueKey: 'own:disposes',
+              hint: '子树卸载时由 Element 释放',
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// 一行「名字 —— 值 —— 备注」。值和备注都带 key，好让 widget test 直接读。
+class _StatRow extends StatelessWidget {
+  const _StatRow({
+    required this.label,
+    required this.value,
+    required this.valueKey,
+    this.hint,
+    this.hintKey,
+  });
+
+  final String label;
+  final String value;
+  final String valueKey;
+  final String? hint;
+  final String? hintKey;
+
+  @override
+  Widget build(BuildContext context) {
+    final ThemeData theme = Theme.of(context);
+    final String? hint = this.hint;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 3),
+      child: Row(
+        children: <Widget>[
+          Expanded(
+            child: Text(
+              label,
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurface.withValues(alpha: 0.7),
+              ),
+            ),
+          ),
+          Text(
+            value,
+            key: ValueKey<String>(valueKey),
+            style: theme.textTheme.titleSmall?.copyWith(
+              fontFamily: 'monospace',
+              fontWeight: FontWeight.w700,
+              color: theme.colorScheme.primary,
+            ),
+          ),
+          if (hint != null) ...<Widget>[
+            const SizedBox(width: 8),
+            Text(
+              hint,
+              key: hintKey == null ? null : ValueKey<String>(hintKey!),
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurface.withValues(alpha: 0.45),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+/// 同类型嵌套：内层 `create` 里读同类型控制器，拿到的是**外层**那一个。
+///
+/// 控制器归 Element，而 `InheritedElement` 自己那份 `_inheritedElements` 里含它
+/// 自己，所以不加处理的话这一行会命中正在创建中的自己。`FlInheritedElement`
+/// 覆写了 `getElementForInheritedWidgetOfExactType` 把本层跳开——`provider` 在
+/// `_InheritedProviderScopeElement` 上做的是同一件事。
+class _NestedCreateDemo extends StatefulWidget {
+  const _NestedCreateDemo({required this.outer});
+
+  /// 页面自己那一层的控制器（`FlBasePageState` 铺的那个）。
+  final LabController outer;
+
+  @override
+  State<_NestedCreateDemo> createState() => _NestedCreateDemoState();
+}
+
+class _NestedCreateDemoState extends State<_NestedCreateDemo> {
+  /// 内层 `create` 里读到的那个实例。
+  LabController? _seenInCreate;
+
+  @override
+  Widget build(BuildContext context) {
+    return FlProviderBuilder<LabController>(
+      create: (BuildContext context) {
+        _seenInCreate = context.rc<LabController>();
+        return LabController();
+      },
+      builder: (_, LabController inner) {
+        final ThemeData theme = Theme.of(context);
+        final bool seesOuter = identical(_seenInCreate, widget.outer);
+        final bool innerIsNew = !identical(inner, widget.outer);
+        return Card(
+          elevation: 0,
+          margin: const EdgeInsets.symmetric(vertical: 4),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+            side: BorderSide(color: theme.dividerColor.withValues(alpha: 0.3)),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Text(
+                  '同类型嵌套：再铺一层 FlProviderBuilder<LabController>',
+                  style: theme.textTheme.titleSmall?.copyWith(
+                    fontWeight: FontWeight.w600,
+                    fontFamily: 'monospace',
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  seesOuter
+                      ? '内层 create 里的 rc<LabController>() → 拿到外层实例 ✓'
+                      : '内层 create 里的 rc<LabController>() → 不是外层实例 ✗',
+                  key: const ValueKey<String>('nested:verdict'),
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    fontFamily: 'monospace',
+                    color: seesOuter
+                        ? theme.colorScheme.primary
+                        : theme.colorScheme.error,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  innerIsNew ? '内层自己 new 的那个与外层不是同一个 ✓' : '内层拿到的竟是外层那一个 ✗',
+                  key: const ValueKey<String>('nested:distinct'),
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    fontFamily: 'monospace',
+                    color: innerIsNew
+                        ? theme.colorScheme.onSurface.withValues(alpha: 0.6)
+                        : theme.colorScheme.error,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 }

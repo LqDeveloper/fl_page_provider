@@ -1,5 +1,5 @@
 // 两个包原样各自导入，一个 hide、一个前缀、一次显式扩展应用都不需要——
-// 本库用 rc / wc / selectIds，provider 用 read / watch，名字不重叠。
+// 本库用 rc + FlSelector，provider 用 read / watch，名字不重叠。
 import 'package:example/interop/deferred_change_notifier_provider.dart';
 import 'package:fl_page_provider/fl_page_provider.dart';
 import 'package:flutter/widgets.dart';
@@ -39,7 +39,7 @@ void main() {
     await pumpTree(tester);
 
     expect(find.text('sel fl.a=0 | watch pkg=0'), findsOneWidget);
-    expect(find.text('wc fl.b=0'), findsOneWidget);
+    expect(find.text('all fl.b=0'), findsOneWidget);
     expect(find.text('rc fl.a=0 | read pkg=0'), findsOneWidget);
     expect(
       <int>[_Mixed.builds, _FlWatch.builds, _ReadOnly.builds],
@@ -47,19 +47,19 @@ void main() {
     );
   });
 
-  testWidgets('通知本库的 a：selectIds 与 wc 重建，provider 那半边不受惊动', (tester) async {
+  testWidgets('通知本库的 a：两个 FlSelector 都重建，provider 那半边不受惊动', (tester) async {
     await pumpTree(tester);
 
     fl.bumpA();
     await tester.pump();
 
     expect(find.text('sel fl.a=1 | watch pkg=0'), findsOneWidget);
-    expect(_Mixed.builds, 2, reason: 'selectIds 认领了 a');
-    expect(_FlWatch.builds, 2, reason: 'wc 不分 ID');
+    expect(_Mixed.builds, 2, reason: '它认领了 a');
+    expect(_FlWatch.builds, 2, reason: '它把所有 ID 都列进来了');
     expect(_ReadOnly.builds, 1, reason: 'rc / read 都不建立依赖');
   });
 
-  testWidgets('通知本库的 b：selectIds 只认领了 a，一次都不该重建', (tester) async {
+  testWidgets('通知本库的 b：只认领了 a 的那个，一次都不该重建', (tester) async {
     await pumpTree(tester);
 
     fl.bumpB();
@@ -127,16 +127,18 @@ class _Mixed extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    builds++;
-    final _FlCounter counter = context.selectIds<_Id, _FlCounter>(const <_Id>[
-      _Id.a,
-    ]);
-    final int value = context.watch<_PkgCounter>().value;
-    return Text('sel fl.a=${counter.a} | watch pkg=$value');
+    return FlSelector<_Id, _FlCounter>(
+      ids: const <_Id>[_Id.a],
+      builder: (BuildContext context, _FlCounter counter, _) {
+        builds++;
+        final int value = context.watch<_PkgCounter>().value;
+        return Text('sel fl.a=${counter.a} | watch pkg=$value');
+      },
+    );
   }
 }
 
-/// 本库的全量订阅。
+/// 本库的「任何通知都刷新」：没有全量依赖这一档了，把所有 ID 都列进来即可。
 class _FlWatch extends StatelessWidget {
   const _FlWatch();
 
@@ -144,8 +146,13 @@ class _FlWatch extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    builds++;
-    return Text('wc fl.b=${context.wc<_FlCounter>().b}');
+    return FlSelector<_Id, _FlCounter>(
+      ids: _Id.values,
+      builder: (BuildContext context, _FlCounter counter, _) {
+        builds++;
+        return Text('all fl.b=${counter.b}');
+      },
+    );
   }
 }
 

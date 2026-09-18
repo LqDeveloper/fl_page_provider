@@ -26,8 +26,9 @@ void onNotified(List<T> events);                // 钩子：通知发出前调�
 ```
 
 `notifyListeners()` 从 `ChangeNotifier` 继承而来，**子类里不要调**：它不推进任何 ID 的版本号，
-`selectIds` / `FlSelector` 的依赖方一个都不会重建，只有 `context.wc` 的会，于是同一次数据变更
-有的块刷了有的块没刷。要整页刷新就把相关 ID 一起列进 `notifyMultiListeners`。
+而依赖方全是按 ID 订阅的，逐 ID 比对一律得出「没变」——这次通知一个依赖方都惊动不了，页面
+静默停在旧数据上。debug 期有门禁（不经两个通知入口进来的调用直接断言），release 里被树摇掉。
+要「任何变更都刷新某一块」就专门留一个全量 ID，每次通知都把它一起列进 `notifyMultiListeners`。
 
 事件总线（同一条全局总线，和页面侧的 `FlStateEventBusMixin` 互通）：
 
@@ -87,11 +88,11 @@ class FlProviderBuilder<T extends FlBaseController> extends StatelessWidget {
 
 ## 读取与选择性重建
 
+公开入口只有两个：`context.rc`（取实例调方法）与 `FlSelector` / `FlSelectorView`（按 ID 订阅）。
+
 ```dart
 extension FlControllerContextExtension on BuildContext {
   T rc<T extends FlBaseController>();                    // 不建依赖，永不重建调用方
-  T wc<T extends FlBaseController>();                    // 全量依赖，每次通知都重建
-  T selectIds<E extends Enum, T extends FlBaseController<E>>(List<E> ids);
 }
 
 class FlSelector<E extends Enum, T extends FlBaseController<E>> extends StatelessWidget {
@@ -109,9 +110,21 @@ abstract class FlSelectorView<E extends Enum, T extends FlBaseController<E>>
 }
 ```
 
-名字是 `rc` / `wc` 而不是 `read` / `watch`：后两个被 pub 上的 `provider` 包占着，同时导入
-会让每个调用点报 `ambiguous_extension_member_access`，加导入前缀也不管用。错开名字之后两个
-包可以原样共存，一个 `hide` 都不用写。
+**已经移除 / 不再公开的写法**（写了就是编译错误或越过 `@internal`）：
+
+| 曾经 | 现在 |
+|---|---|
+| `context.wc<C>()`（全量依赖） | 已删除。要「任何变更都刷新某一块」就留一个全量 ID，每次通知都带上它，调用方 `FlSelector(ids: const [E.all])` |
+| `context.selectIds<E, C>([...])` | 转为 `@internal`，改用 `FlSelector` / `FlSelectorView` |
+| `FlPageProvider.of(context, listen:, aspect:)` | 参数收成 `ids:`；且 `FlPageProvider` 本就是包内实现，业务代码不该出现 |
+
+删 `wc` 的理由：全量依赖**跨帧不可逆**——Flutter 只在 `Element.deactivate()` 时解依赖登记，
+而全量依赖一旦登记，后续的 ID 登记不能再把它收窄，于是一个 Widget 只要有过一次 `wc`，
+之后哪怕每帧都按 ID 订阅也回不到 ID 粒度，会一直跟着每一次通知重建直到卸载，不报错也没日志。
+
+名字是 `rc` 而不是 `read`：`read` / `watch` 被 pub 上的 `provider` 包占着，同时导入会让每个
+调用点报 `ambiguous_extension_member_access`，加导入前缀也不管用。错开名字之后两个包可以
+原样共存，一个 `hide` 都不用写。
 
 `FlSelector` / `FlSelectorView` 的上界是 `FlBaseController<E>`，把 ID 的枚举类型和控制器绑在
 一起。`child` 只构建一次、每次重建原样交还，Flutter 见到同一个 Widget 实例会跳过那棵子树——

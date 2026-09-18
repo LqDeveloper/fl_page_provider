@@ -87,7 +87,7 @@ class HomePage extends StatelessWidget {
           _NavCard(
             icon: Icons.science_outlined,
             title: '更新引擎实验台',
-            subtitle: 'read / watch / selectIds 逐个计重建次数，看清谁被刷新了',
+            subtitle: 'rc / FlSelector 逐个计重建次数，再看控制器的生死',
             onTap: () => _push(context, '/providerLab'),
           ),
         ],

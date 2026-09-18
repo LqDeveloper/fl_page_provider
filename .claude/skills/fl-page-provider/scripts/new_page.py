@@ -204,7 +204,7 @@ def page_block(
         "        ),",
         "      ),",
         "      floatingActionButton: FloatingActionButton(",
-        "        // 只是调方法：直接用 controller（或 context.rc），别用 wc——那会让整页重建。",
+        "        // 只是调方法：直接用 controller（或 context.rc），不建立依赖。",
         "        onPressed: controller.increase,",
         "        child: const Icon(Icons.add),",
         "      ),",

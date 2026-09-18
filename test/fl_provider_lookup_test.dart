@@ -2,7 +2,7 @@ import 'package:fl_page_provider/fl_page_provider.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-/// 查找与所有权：`rc` / `wc` / `selectIds` 到底会命中哪一个 provider，
+/// 查找与所有权：`rc` / `FlSelector` 到底会命中哪一个 provider，
 /// 以及「一个控制器只能被一个 provider 认领」这条单向所有权。
 void main() {
   Widget host(Widget child) =>
@@ -195,17 +195,74 @@ void main() {
   });
 
   group('create 的执行时机', () {
-    testWidgets('跑在 build 里，因此能安全地读 InheritedWidget', (
-      WidgetTester tester,
-    ) async {
-      TextDirection? seen;
+    testWidgets('跑在 build 里：能 rc 到祖先控制器', (WidgetTester tester) async {
+      _ParentController? outer;
+      _ParentController? seen;
 
       await tester.pumpWidget(
         host(
           FlProviderBuilder<_ParentController>(
+            create: (_) => outer = _ParentController(),
+            builder: (_, _) => FlProviderBuilder<_ChildController>(
+              create: (BuildContext context) {
+                // rc 走 getElementForInheritedWidgetOfExactType，不建立依赖，
+                // 所以它是 create 里唯一被认可的查找方式。若 create 跑在
+                // initState 里，这一行连祖先都够不着。
+                seen = context.rc<_ParentController>();
+                return _ChildController();
+              },
+              builder: (_, _) => const SizedBox.shrink(),
+            ),
+          ),
+        ),
+      );
+
+      expect(tester.takeException(), isNull);
+      expect(seen, isNotNull);
+      expect(identical(seen, outer), isTrue);
+    });
+
+    testWidgets('同类型嵌套：create 里 rc 拿到的是祖先那一层，不是正在创建的自己', (
+      WidgetTester tester,
+    ) async {
+      _ParentController? outer;
+      _ParentController? seen;
+
+      await tester.pumpWidget(
+        host(
+          FlProviderBuilder<_ParentController>(
+            create: (_) => outer = _ParentController(),
+            builder: (_, _) => FlProviderBuilder<_ParentController>(
+              // 与外层同类型。控制器归 Element，而 Element 自己的
+              // _inheritedElements 里含它自己——不把本层跳开的话，这一行会命中
+              // 正在创建中的自己。FlInheritedElement 覆写了
+              // getElementForInheritedWidgetOfExactType，provider 在
+              // _InheritedProviderScopeElement 上做的是同一件事。
+              create: (BuildContext context) {
+                seen = context.rc<_ParentController>();
+                return _ParentController();
+              },
+              builder: (_, _) => const SizedBox.shrink(),
+            ),
+          ),
+        ),
+      );
+
+      expect(tester.takeException(), isNull);
+      expect(identical(seen, outer), isTrue);
+    });
+
+    testWidgets('create 里建立 InheritedWidget 依赖会被 debug 锁拦下', (
+      WidgetTester tester,
+    ) async {
+      await tester.pumpWidget(
+        host(
+          FlProviderBuilder<_ParentController>(
             create: (BuildContext context) {
-              // 若 create 跑在 initState 里，这一行会抛。
-              seen = Directionality.of(context);
+              // 依赖建得成也没用：create 只跑一次，Directionality 变了它不会重跑，
+              // 控制器会静默停在旧值上。provider 的 _debugInheritLocked 拦的是
+              // 同一件事。
+              Directionality.of(context);
               return _ParentController();
             },
             builder: (_, _) => const SizedBox.shrink(),
@@ -213,8 +270,9 @@ void main() {
         ),
       );
 
-      expect(tester.takeException(), isNull);
-      expect(seen, TextDirection.ltr);
+      final Object? error = tester.takeException();
+      expect(error, isAssertionError);
+      expect('$error', contains('create 里建立了对'));
     });
   });
 }

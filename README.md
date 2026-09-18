@@ -20,7 +20,7 @@ English | [中文](README_zh.md)
   - [1. Define a controller](#1-define-a-controller)
   - [2. Host it on a page](#2-host-it-on-a-page)
   - [3. Rebuild only what changed](#3-rebuild-only-what-changed)
-  - [4. Three read granularities](#4-three-read-granularities)
+  - [4. Two ways to read the controller](#4-two-ways-to-read-the-controller)
   - [5. Page and app lifecycle](#5-page-and-app-lifecycle)
   - [6. Pages inside PageView / TabBarView](#6-pages-inside-pageview--tabbarview)
 - [API reference](#api-reference)
@@ -70,9 +70,10 @@ Notifications raised during a `build` are deferred to the end of the frame inste
   hooks, `onPageDispose`) delivered straight to the controller; app foreground/background is opt-in
   per page.
 - ID-granular rebuilds: `notifySingleListener(id)` rebuilds only the widgets that asked for that ID.
-- Three read granularities from `BuildContext`: `rc` (no dependency), `wc` (every notification),
-  `selectIds` (only the listed IDs); plus `FlSelector` / `FlSelectorView` with a `child` escape
-  hatch for the static part of a subtree.
+- Only two ways to read the controller, so there is nothing to get wrong: `context.rc` to call a
+  method (no dependency), `FlSelector` / `FlSelectorView` to display data (rebuilds only when one of
+  the listed IDs is notified). The latter takes a `child` escape hatch for the static part of a
+  subtree.
 - Correct behaviour for pages inside `PageView` / `TabBarView` / `IndexedStack`, driven by page
   index rather than route.
 - A process-wide event bus on the controller (`observeEvent` / `dispatchEvent`) with subscriptions
@@ -350,33 +351,58 @@ class FollowerCount extends FlSelectorView<ProfileId, ProfileController> {
 }
 ```
 
-### 4. Three read granularities
+### 4. Two ways to read the controller
 
-**When to use**: whenever you reach for the controller from a widget. Picking the wrong one is the
-difference between "nothing updates" and "the whole page rebuilds on every keystroke".
+**When to use**: whenever you reach for the controller from a widget. There are only two entry
+points, split by whether you want to rebuild when the data changes:
 
-| Call | Creates a dependency | Rebuilds the caller |
+| Entry point | Creates a dependency | Rebuilds |
 |---|---|---|
 | `context.rc<T>()` | no | never |
-| `context.selectIds<E, T>(ids)` | yes | only when one of `ids` is notified |
-| `context.wc<T>()` | yes | on every notification |
+| `FlSelector` / `FlSelectorView` | yes | only when one of `ids` is notified |
 
 ```dart
-// In a callback — you only want to call a method.
+// In a callback — you only want to call a method, no rebuild needed.
 onPressed: () => context.rc<ProfileController>().rename('new name'),
 
-// In build — depend on two IDs.
-final controller = context.selectIds<ProfileId, ProfileController>(
-  const [ProfileId.nickname, ProfileId.avatar],
-);
-
-// In build — depend on everything.
-final controller = context.wc<ProfileController>();
+// To display data — wrap it in a FlSelector that watches just those IDs.
+FlSelector<ProfileId, ProfileController>(
+  ids: const [ProfileId.nickname, ProfileId.avatar],
+  builder: (context, c, _) => Text(c.nickname),
+)
 ```
 
-`rc` and `wc` are short for *read controller* and *watch controller*. They deliberately avoid the
-names `read` and `watch`, which the `provider` package already defines as extensions on
-`BuildContext` — so both packages can be imported side by side with no `hide` and no import prefix.
+`rc` is short for *read controller*. It deliberately avoids the name `read`, which the `provider`
+package already defines as an extension on `BuildContext` along with `watch` — so both packages can
+be imported side by side with no `hide` and no import prefix.
+
+**There is no "rebuild on every notification" granularity.** ID granularity is the only
+notification semantics this package has. When you genuinely want "refresh this block on any
+change", reserve an ID for it and include it in every notification:
+
+```dart
+enum ProfileId { all, nickname, avatar }
+
+// Controller side
+notifyMultiListeners(const [ProfileId.all, ProfileId.nickname]);
+
+// Caller side
+FlSelector<ProfileId, ProfileController>(
+  ids: const [ProfileId.all],
+  builder: (context, c, _) => Text(c.nickname),
+)
+```
+
+That keeps "what rebuilds, and why" written at the call site instead of buried in the controller.
+
+**Subscribing by ID is only offered through a widget — there is no `BuildContext` form.** The
+dependency is registered on the element that *starts* the subscription, so doing it from a page's
+`build` makes the whole page shake on a single ID; and because Flutter only clears dependency
+registrations on `Element.deactivate()` and never on rebuild, doing it behind a condition would
+leave a permanently wasteful registration behind. `FlSelector` is itself a widget, which solves
+both: the rebuild boundary is that widget, and when the condition no longer holds it unmounts and
+the dependency goes with it. **Putting a `FlSelector` inside an `if` is the safe pattern**, not a
+pitfall.
 
 ### 5. Page and app lifecycle
 
@@ -508,7 +534,7 @@ Everything exported by `package:fl_page_provider/fl_page_provider.dart`.
 | `FlSelector<E, T>` | class | Rebuild on the listed IDs only | [3](#3-rebuild-only-what-changed) |
 | `FlSelectorBuilder<E, T>` | typedef | `FlSelector.builder`'s signature | [3](#3-rebuild-only-what-changed) |
 | `FlSelectorView<E, T>` | abstract class | `FlSelector` as a class you extend | [3](#3-rebuild-only-what-changed) |
-| `FlControllerContextExtension` | extension | `context.rc` / `wc` / `selectIds` | [4](#4-three-read-granularities) |
+| `FlControllerContextExtension` | extension | `context.rc` | [4](#4-two-ways-to-read-the-controller) |
 
 Importing this package also gives you everything from `fl_page_lifecycle` — `FlRouteObserver`,
 `FlPageIndexScope`, `FlLifecycleState`, `FlPageLifecycleView`, `FlGlobalEventBus` and the rest —
@@ -535,14 +561,8 @@ the comparison always says "unchanged" and the dependent never rebuilds. Debug b
 release builds fail silently.
 
 **`ids` must not be empty.** `const []` reads like "no ID filter" but means "I care about no ID at
-all", so the widget never rebuilds. Use `context.wc<T>()` if you want every notification. Asserted in
-debug.
-
-**Do not put `selectIds` behind a condition.** Flutter only clears dependency registrations on
-`Element.deactivate()`, never on rebuild. Once a `build` takes the branch that skips the call, the IDs
-registered on the previous pass stay in the table and keep rebuilding the widget until it is
-unmounted. Call it unconditionally, or move that part into its own widget so it unmounts. The same
-applies to `provider`'s `context.select`.
+all", so the widget never rebuilds. If you want every notification, reserve an ID for it and include
+that ID in every notification. Asserted in debug.
 
 **`create` hands over ownership.** The instance it returns is disposed when the subtree goes away.
 Returning a shared singleton means the first page to close disposes it, and every other subtree

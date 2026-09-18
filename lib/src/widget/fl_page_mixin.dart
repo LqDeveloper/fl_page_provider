@@ -39,6 +39,12 @@ mixin FlPageMixin<T extends FlBaseController> {
   /// `wrapItemBuilder` 包裹子页，只做一半不报错但完全无效。
   bool get observePageIndex => false;
 
+  /// 创建本页控制器，只调用一次，实例由 provider 在页面销毁时 `dispose`。
+  ///
+  /// 跑在首帧 `build` 里，早于控制器的 `onPageInit`，约束见
+  /// [FlProviderBuilder.create]：可以 `context.rc<X>()` 读祖先控制器，不要用
+  /// `Theme.of` / `MediaQuery.of` 这类会建立依赖的查找，也不要在这里同步发通知。
+  /// 这里只 new，初始化副作用放 `onPageInit`，拉数据放 `onPageStart`。
   T createController(BuildContext context);
 
   Widget buildWithController(BuildContext context, T controller);

@@ -15,6 +15,23 @@ coverage/
 fl_core_provider/
 .claude/
 
+# AI 评测/分析产物：仓库里留着，但不该随包发到 pub.dev
+Claude outputs/
+
+# IDE 工程文件。.idea/ 上面已经排除，模块文件在仓库根目录，得单列
+# （.pubignore 存在时 pub 不再读 .gitignore，未跟踪的文件同样会被打进包）
+*.iml
+
+# example 的平台脚手架。pub.dev 的 Example 页只读 example/lib 下的 Dart 源码，
+# 这些目录（连同里面的 app icon）对使用者没有用处，占的还是大头；要跑起来
+# 在 example/ 下 `flutter create .` 随时能再生成，完整工程在 GitHub 上。
+example/android/
+example/ios/
+example/linux/
+example/macos/
+example/windows/
+example/web/
+
 # macOS
 .DS_Store
 **/.DS_Store

@@ -28,7 +28,7 @@ void main() {
   }
 
   group('不该发出的通知', () {
-    testWidgets('notifyMultiListeners([]) 是空操作：连 wc 都不重建', (
+    testWidgets('notifyMultiListeners([]) 是空操作：连订了全部 ID 的都不重建', (
       WidgetTester tester,
     ) async {
       final _NotifyController controller = await pumpTree(
@@ -97,7 +97,7 @@ void main() {
       );
     });
 
-    testWidgets('被拦下之后一个依赖方都没惊动，连 wc 都没有', (WidgetTester tester) async {
+    testWidgets('被拦下之后一个依赖方都没惊动，连订了全部 ID 的都没有', (WidgetTester tester) async {
       final _NotifyController controller = await pumpTree(
         tester,
         const Column(children: <Widget>[_WatchProbe(), _SelA(), _SelB()]),
@@ -330,20 +330,39 @@ void main() {
       );
     });
 
-    test('重复注册同一批 ID 是幂等的，版本号跟着归零', () {
+    test('重新注册：已有 ID 保留版本号，新 ID 从 0 起，落选的 ID 被移除', () {
       final _NotifyController controller = _NotifyController();
       addTearDown(controller.dispose);
       controller.bumpA();
-      expect(controller.idVersion(_Id.a), 1);
+      controller.bumpA();
+      expect(controller.idVersion(_Id.a), 2);
 
-      controller.registerOnly(const <_Id>[_Id.a, _Id.b]);
+      controller.registerOnly(const <_Id>[_Id.a, _Id.ghost]);
 
-      expect(controller.isRegistered(_Id.a), isTrue);
       expect(
         controller.idVersion(_Id.a),
-        0,
-        reason: 'registerIds 是重建整张表，不是补登记',
+        2,
+        reason: '版本号只增不减是依赖方快照可比的前提，重新注册不能把它清零',
       );
+      expect(controller.idVersion(_Id.ghost), 0, reason: '新 ID 从 0 起');
+      expect(controller.isRegistered(_Id.b), isFalse, reason: '不在新表里的被移除');
+      expect(controller.idVersion(_Id.b), 0, reason: '未注册的 ID 恒为 0');
+    });
+
+    test('重新注册后立刻推进到旧快照值，依赖方仍能比出变化', () {
+      // 清零版本的失效场景：快照 {a: 2}，清零后连推 2 次合并成一次通知，
+      // 比对 2 == 2 会被吞掉。保留版本号之后推进到 4，比得出来。
+      final _NotifyController controller = _NotifyController();
+      addTearDown(controller.dispose);
+      controller.bumpA();
+      controller.bumpA();
+      final int snapshot = controller.idVersion(_Id.a);
+
+      controller.registerOnly(const <_Id>[_Id.a, _Id.b]);
+      controller.bumpA();
+      controller.bumpA();
+
+      expect(controller.idVersion(_Id.a), isNot(snapshot));
     });
   });
 
@@ -451,7 +470,12 @@ class _WatchProbe extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     _count('watch');
-    return Text('watch a=${context.wc<_NotifyController>().a}');
+    // 订了全部**已注册**的 ID（`ghost` 故意不在 shouldNotifyIds 里，不能列进来）
+    // ——任何一次有效通知都会惊动它。
+    final _NotifyController c = context.selectIds<_Id, _NotifyController>(
+      const <_Id>[_Id.a, _Id.b],
+    );
+    return Text('watch a=${c.a}');
   }
 }
 

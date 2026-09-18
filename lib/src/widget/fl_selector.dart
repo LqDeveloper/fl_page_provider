@@ -33,7 +33,9 @@ typedef FlSelectorBuilder<E extends Enum, T extends FlBaseController<E>> =
 /// 编译过去。
 ///
 /// 代价是：只混入 `FlNotifyMixin` 而不继承 [FlBaseController] 的控制器用不了本
-/// 组件。那种情况直接用 `context.selectIds`，它的上界仍然只到 `ChangeNotifier`。
+/// 组件。而本组件（连同 [FlSelectorView]）是按 ID 订阅的**唯一**公开入口——
+/// 底下那层 `context.selectIds` 已转为包内实现，没有绕开的写法。需要订阅就让
+/// 控制器继承 [FlBaseController]。
 class FlSelector<E extends Enum, T extends FlBaseController<E>>
     extends StatelessWidget {
   const FlSelector({
@@ -60,8 +62,9 @@ class FlSelector<E extends Enum, T extends FlBaseController<E>>
     assert(
       ids.isNotEmpty,
       '$T: FlSelector 的 ids 是空列表。空列表不是「不限定 ID」，而是「一个 ID 都'
-      '不关心」——本组件永远不会重建。要跟着控制器全量刷新请改用 '
-      'context.wc<$T>()。',
+      '不关心」——本组件永远不会重建。要跟着控制器全量刷新，请在 shouldNotifyIds '
+      '里专门留一个「全量」ID，每次通知都把它一起列进 notifyMultiListeners，'
+      '这里订它。',
     );
     assert(
       ids.every(controller.isRegistered),

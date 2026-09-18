@@ -30,7 +30,7 @@ PUBLIC = {
 }
 INTERNAL = {
     "FlPageProvider": "包内实现，页面请用 FlProviderBuilder / FlBasePage / FlBasePageState",
-    "FlInheritedWidget": "包内实现，取控制器用 context.rc / wc / selectIds",
+    "FlInheritedWidget": "包内实现，取实例用 context.rc，按 ID 订阅用 FlSelector",
     "FlNotifyMixin": "包内实现，控制器请继承 FlBaseController",
     "FlEventBusMixin": "包内实现，事件能力已在 FlBaseController 上",
     "FlIdVersions": "包内实现，外部拿不到",
@@ -39,8 +39,8 @@ INTERNAL = {
 FAKE_MEMBERS = {
     "notifyId": "notifySingleListener", "notifyIds": "notifyMultiListeners",
     "registerId": "registerIds（一般不用手调，写 shouldNotifyIds 就行）",
-    "selectId": "selectIds", "watchIds": "selectIds", "readController": "rc",
-    "watchController": "wc", "notifyAll": "notifyListeners（但通常该用 notifySingleListener）",
+    "selectId": "FlSelector", "watchIds": "FlSelector", "readController": "rc",
+    "watchController": "FlSelector", "notifyAll": "notifyMultiListeners",
 }
 FL_TOKEN = re.compile(r"\bFl[A-Z][A-Za-z0-9_]*")
 
@@ -192,16 +192,29 @@ def main() -> int:
                 hit(True, f, line_of(code, m.start()), f"{fake} 不存在", "编造的成员名", f"改用 {real}")
         if not has_provider_pkg:
             for m in re.finditer(r"context\.(read|watch|select)\s*<", code):
-                g = {"read": "rc", "watch": "wc", "select": "selectIds"}[m.group(1)]
                 hit(True, f, line_of(code, m.start()), f"context.{m.group(1)} 不是本库的名字",
                     "那是 provider 包的扩展；本库为了能和它共存，故意用了另一套名字",
-                    f"改用 context.{g}")
+                    "取实例调方法用 context.rc<T>()，按 ID 订阅用 FlSelector / FlSelectorView")
+
+        # ---- 已移除 / 不再公开的入口 ----
+        for m in re.finditer(r"context\.wc\s*<", code):
+            hit(True, f, line_of(code, m.start()), "context.wc 已经从本库移除",
+                "它建立的全量依赖跨帧不可逆：一旦登记，后续的 ID 登记不能再把它收窄，"
+                "这个 Widget 会一直跟着每一次通知重建直到卸载，不报错也没日志",
+                "要「任何变更都刷新这一块」就留一个全量 ID，每次通知都一起列进 "
+                "notifyMultiListeners，调用方用 FlSelector 订它")
+        for m in re.finditer(r"context\.selectIds\s*<", code):
+            hit(True, f, line_of(code, m.start()), "context.selectIds 已转为包内实现（@internal）",
+                "依赖登记在调用方那个 Element 上：写在页面 build 里就是整页跟着一个 ID 抖，"
+                "放进条件分支还会留下永久白重建的尾巴",
+                "改用 FlSelector<E, C>(ids: ...) 或 FlSelectorView<E, C>——"
+                "那层 Widget 边界正是安全用它的前提")
 
         # ---- 空 ids ----
         for m in re.finditer(r"\bids\s*:\s*(?:const\s*)?\[\s*\]", code):
             hit(True, f, line_of(code, m.start()), "ids 是空列表",
                 "空列表不是「不限定 ID」，是「一个 ID 都不关心」——这块永远不会重建",
-                "写上真正关心的 ID；要全量刷新用 context.wc<T>()")
+                "写上真正关心的 ID；要全量刷新就留一个全量 ID，每次通知都带上它")
 
         # ---- 通知了没登记的 ID ----
         reg = re.search(r"shouldNotifyIds\s*=>\s*([^;]+);", code)
@@ -250,36 +263,16 @@ def main() -> int:
                         "（症状：埋点重复上报、接口重复请求）", "移到 onPageInit，只订阅一次")
                 if is_ctrl and re.search(r"(?<!super\.)\bnotifyListeners\s*\(\s*\)", body):
                     hit(True, f, ln, f"{cname}.{name} 里调了 notifyListeners()",
-                        "FlBaseController 的子类不该调它：它绕过 ID 版本号，"
-                        "selectIds / FlSelector 的依赖方一个都不会重建，只有 context.wc 的会——"
-                        "同一次数据变更，有的块刷了有的块没刷，最难查",
+                        "它不推进任何 ID 的版本号，而依赖方全是按 ID 订阅的，"
+                        "这次通知一个都惊动不了，页面静默停在旧数据上（debug 期有门禁会断言）",
                         "改用 notifySingleListener(id) / notifyMultiListeners([...])；"
-                        "要整页刷新就把相关 ID 一起列进 notifyMultiListeners")
+                        "要「任何变更都刷新某一块」就留一个全量 ID，每次通知都一起列进来")
 
         # ---- 订阅传闭包字面量 ----
         for m in re.finditer(r"observeEvent<[^>]+>\s*\(\s*\(", code):
             hit(False, f, line_of(code, m.start()), "observeEvent 传的是闭包字面量",
                 "重复订阅的拦截靠回调相等来识别，闭包每次都是新对象，拦不住",
                 "传方法引用：observeEvent<Foo>(_onFoo)")
-
-        # ---- selectIds 放在条件分支里 ----
-        lines = code.split("\n")
-        for i, line in enumerate(lines):
-            if re.match(r"\s*if\s*\(", line) and "selectIds" not in line:
-                indent = len(line) - len(line.lstrip())
-                for nxt in lines[i + 1:i + 8]:
-                    if nxt.strip() and len(nxt) - len(nxt.lstrip()) <= indent:
-                        break
-                    if "context.selectIds" in nxt:
-                        hit(False, f, i + 1, "selectIds 出现在条件分支里",
-                            "Flutter 只在 Element.deactivate 时解除依赖登记，重建时从不清理；"
-                            "分支一关，上轮登记的 ID 会继续让这个 Widget 白重建到卸载为止",
-                            "无条件调用，或把那一块拆成独立 Widget")
-                        break
-            if re.search(r"on(Pressed|Tap|Changed|Submitted)\s*:", line) and "context.wc<" in line:
-                hit(False, f, i + 1, "事件回调里用了 context.wc",
-                    "wc 会建立全量依赖，控制器每次通知都重建调用方——回调里只是调方法而已",
-                    "改用 context.rc<T>()")
 
         # ---- create 交出的是所有权 ----
         for m in re.finditer(r"(?:create\s*:\s*\(\s*[^)]*\)|createController\s*\([^)]*\))\s*"

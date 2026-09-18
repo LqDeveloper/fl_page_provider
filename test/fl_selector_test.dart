@@ -2,8 +2,8 @@ import 'package:fl_page_provider/fl_page_provider.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-/// 依赖登记这一侧的契约：门禁断言拦不拦得住、多次登记怎么累加、
-/// 与 `wc` 混用时谁说了算，以及 `FlSelector` / `FlSelectorView` 的 child。
+/// 依赖登记这一侧的契约：门禁断言拦不拦得住、多次登记怎么累加，
+/// 以及 `FlSelector` / `FlSelectorView` 的 child。
 void main() {
   int countOf(String key) => _builds[key] ?? 0;
 
@@ -88,36 +88,6 @@ void main() {
       controller.bump(_Id.c);
       await tester.pump();
       expect(countOf('twice'), 3, reason: '没登记的 ID 仍然不该惊动它');
-    });
-  });
-
-  group('wc 与 selectIds 混用', () {
-    testWidgets('先 wc 后 selectIds：全量依赖不会被收窄', (WidgetTester tester) async {
-      final _SelController controller = await pumpTree(
-        tester,
-        const _WatchThenSelect(),
-      );
-
-      controller.bump(_Id.c);
-      await tester.pump();
-
-      expect(
-        countOf('watch-then-select'),
-        2,
-        reason: 'c 没被 select，但 wc 那半边要求全量刷新',
-      );
-    });
-
-    testWidgets('先 selectIds 后 wc：照样是全量依赖', (WidgetTester tester) async {
-      final _SelController controller = await pumpTree(
-        tester,
-        const _SelectThenWatch(),
-      );
-
-      controller.bump(_Id.c);
-      await tester.pump();
-
-      expect(countOf('select-then-watch'), 2);
     });
   });
 
@@ -371,30 +341,6 @@ class _TwiceSelect extends StatelessWidget {
     _count('twice');
     context.selectIds<_Id, _SelController>(const <_Id>[_Id.a]);
     context.selectIds<_Id, _SelController>(const <_Id>[_Id.b]);
-    return const SizedBox.shrink();
-  }
-}
-
-class _WatchThenSelect extends StatelessWidget {
-  const _WatchThenSelect();
-
-  @override
-  Widget build(BuildContext context) {
-    _count('watch-then-select');
-    context.wc<_SelController>();
-    context.selectIds<_Id, _SelController>(const <_Id>[_Id.a]);
-    return const SizedBox.shrink();
-  }
-}
-
-class _SelectThenWatch extends StatelessWidget {
-  const _SelectThenWatch();
-
-  @override
-  Widget build(BuildContext context) {
-    _count('select-then-watch');
-    context.selectIds<_Id, _SelController>(const <_Id>[_Id.a]);
-    context.wc<_SelController>();
     return const SizedBox.shrink();
   }
 }

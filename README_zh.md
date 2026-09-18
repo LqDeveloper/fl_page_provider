@@ -20,7 +20,7 @@
   - [1. 定义控制器](#1-定义控制器)
   - [2. 把它挂到页面上](#2-把它挂到页面上)
   - [3. 只重建变了的那一块](#3-只重建变了的那一块)
-  - [4. 三档读取粒度](#4-三档读取粒度)
+  - [4. 两个读取入口](#4-两个读取入口)
   - [5. 页面与 App 生命周期](#5-页面与-app-生命周期)
   - [6. PageView / TabBarView 里的子页](#6-pageview--tabbarview-里的子页)
 - [API 速查](#api-速查)
@@ -66,8 +66,8 @@ class ProfilePage extends FlBasePage<ProfileController> {
 - 页面生命周期（`onPageStart`、`onPageResume`、`onPagePause`、`onPageStop`、进出场动画钩子、
   `onPageDispose`）直接回调到控制器上；App 前后台回调按页面单独开启。
 - ID 粒度重建：`notifySingleListener(id)` 只重建认领了该 ID 的 Widget。
-- 从 `BuildContext` 取控制器的三档粒度：`rc`（不建立依赖）、`wc`（每次通知）、
-  `selectIds`（仅所列 ID）；外加 `FlSelector` / `FlSelectorView`，它们的 `child` 参数
+- 取控制器只有两个入口，不用挑：调方法用 `context.rc`（不建立依赖），显示数据用
+  `FlSelector` / `FlSelectorView`（只在所列 ID 被通知时重建）。后者的 `child` 参数
   可以把子树里不变的部分摘出重建范围。
 - `PageView` / `TabBarView` / `IndexedStack` 里的子页有正确行为——可见性由页码驱动，而非路由。
 - 控制器自带进程内事件总线（`observeEvent` / `dispatchEvent`），订阅在 dispose 时自动取消。
@@ -338,33 +338,53 @@ class FollowerCount extends FlSelectorView<ProfileId, ProfileController> {
 }
 ```
 
-### 4. 三档读取粒度
+### 4. 两个读取入口
 
-**什么时候用**：每次要从 Widget 里拿控制器的时候。挑错了，区别就是「怎么点都不更新」和
-「输入一个字整页重建」。
+**什么时候用**：每次要从 Widget 里拿控制器的时候。只有两个入口，按「要不要跟着数据重建」分：
 
-| 调用 | 建立依赖 | 何时重建调用方 |
+| 入口 | 建立依赖 | 何时重建 |
 |---|---|---|
 | `context.rc<T>()` | 否 | 从不 |
-| `context.selectIds<E, T>(ids)` | 是 | 仅所列 ID 被通知时 |
-| `context.wc<T>()` | 是 | 控制器每次通知 |
+| `FlSelector` / `FlSelectorView` | 是 | 仅所列 ID 被通知时 |
 
 ```dart
-// 回调里——只是想调个方法。
+// 回调里——只是想调个方法，不需要重建。
 onPressed: () => context.rc<ProfileController>().rename('new name'),
 
-// build 里——依赖两个 ID。
-final controller = context.selectIds<ProfileId, ProfileController>(
-  const [ProfileId.nickname, ProfileId.avatar],
-);
-
-// build 里——依赖全部通知。
-final controller = context.wc<ProfileController>();
+// 要显示数据——包一层 FlSelector，只认这两个 ID。
+FlSelector<ProfileId, ProfileController>(
+  ids: const [ProfileId.nickname, ProfileId.avatar],
+  builder: (context, c, _) => Text(c.nickname),
+)
 ```
 
-`rc` / `wc` 是 *read controller* / *watch controller* 的缩写。它们刻意避开了 `read` 和 `watch`
-这两个名字——`provider` 包已经在 `BuildContext` 上占用了它们，避开之后两个包可以同时导入，
-既不用 `hide` 也不用加导入前缀。
+`rc` 是 *read controller* 的缩写。它刻意避开了 `read` 这个名字——`provider` 包已经在
+`BuildContext` 上占用了 `read` / `watch`，避开之后两个包可以同时导入，既不用 `hide`
+也不用加导入前缀。
+
+**没有「每次通知都重建」那一档。** ID 粒度是本库唯一的通知语义。确实需要「任何变更都刷新
+这一块」时，专门留一个 ID，每次通知都把它一起列进 `notifyMultiListeners`：
+
+```dart
+enum ProfileId { all, nickname, avatar }
+
+// 控制器侧
+notifyMultiListeners(const [ProfileId.all, ProfileId.nickname]);
+
+// 调用方侧
+FlSelector<ProfileId, ProfileController>(
+  ids: const [ProfileId.all],
+  builder: (context, c, _) => Text(c.nickname),
+)
+```
+
+这样「谁会因为什么而重建」始终写在调用点上，不必回控制器里翻。
+
+**按 ID 订阅只经 Widget 提供，没有 `BuildContext` 上的写法。** 依赖登记在**发起订阅的那个
+Element** 上：写在页面 `build` 里就是整页跟着一个 ID 抖；而 Flutter 只在
+`Element.deactivate()` 时解除依赖登记、重建时从不清理，放进条件分支还会留下永久白重建的
+尾巴。`FlSelector` 自己就是一层 Widget，两个问题一起没有——重建边界就是它，条件不成立时
+它整个卸载、依赖随之解除。所以**把 `FlSelector` 放进 `if` 分支是安全写法**，不是坑。
 
 ### 5. 页面与 App 生命周期
 
@@ -494,7 +514,7 @@ PageView.builder(
 | `FlSelector<E, T>` | class | 只在所列 ID 变化时重建 | [3](#3-只重建变了的那一块) |
 | `FlSelectorBuilder<E, T>` | typedef | `FlSelector.builder` 的签名 | [3](#3-只重建变了的那一块) |
 | `FlSelectorView<E, T>` | abstract class | `FlSelector` 的类形式，供继承 | [3](#3-只重建变了的那一块) |
-| `FlControllerContextExtension` | extension | `context.rc` / `wc` / `selectIds` | [4](#4-三档读取粒度) |
+| `FlControllerContextExtension` | extension | `context.rc` | [4](#4-两个读取入口) |
 
 导入本包的同时也会拿到 `fl_page_lifecycle` 的全部内容——`FlRouteObserver`、`FlPageIndexScope`、
 `FlLifecycleState`、`FlPageLifecycleView`、`FlGlobalEventBus` 等等——不需要在自己的
@@ -518,12 +538,8 @@ PageView.builder(
 「没变」，依赖方一次都不会重建。debug 下有断言拦，release 下静默失败。
 
 **`ids` 不能是空列表。** `const []` 看着像「不限定 ID」，实际是「一个 ID 都不关心」，
-于是这个 Widget 永远不会重建。想跟着控制器全量刷新请用 `context.wc<T>()`。debug 下有断言。
-
-**不要把 `selectIds` 放在条件分支里。** Flutter 只在 `Element.deactivate()` 时解除依赖登记，
-重建时从不清理。所以一旦某次 `build` 走了不调用的那条分支，上一轮登记的 ID 就留在表里，
-继续让这个 Widget 白重建，直到它被卸载。要么无条件调用，要么把那一块拆成独立 Widget
-让它能整个卸载。`provider` 的 `context.select` 也是同样的行为。
+于是这个 Widget 永远不会重建。想跟着控制器全量刷新，请专门留一个 ID 并在每次通知时把它
+一起列进来。debug 下有断言。
 
 **`create` 交出的是所有权。** 它返回的实例会在子树销毁时被 dispose。返回一个共享单例意味着
 第一个关闭的页面就把它 dispose 了，其余子树静默冻结且不报错。一个 `create` 对应一个新实例。

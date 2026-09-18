@@ -11,7 +11,7 @@ import '../provider/fl_page_provider.dart';
 ///
 /// 注意 [notifyListeners] 本身**没有 ID 概念**：它照常通知所有监听者，ID 粒度
 /// 是在 Widget 侧按版本号过滤出来的。正因为如此，子类直接调它会让所有
-/// `selectIds` 依赖方静默不刷新，debug 期有门禁拦着，见 [notifyListeners]。
+/// `FlSelector` 依赖方静默不刷新，debug 期有门禁拦着，见 [notifyListeners]。
 ///
 /// 本 mixin 只管「喊」，不管「什么时候兑现成重建」——包括 build 阶段发出的通知
 /// 该如何推迟。那道约束来自 Widget 层，也就由 Widget 层的 `FlInheritedElement`
@@ -44,14 +44,24 @@ mixin FlNotifyMixin<T extends Enum> on ChangeNotifier implements FlIdVersions {
     super.dispose();
   }
 
+  /// 注册需要追踪的 ID。表是**覆盖**而不是追加：不在 [ids] 里的旧 ID 会被移除。
+  ///
+  /// 已在表里的 ID **保留版本号**，只有新 ID 从 0 起。`FlInheritedElement` 只比
+  /// 「依赖方登记时的快照」与「当前值」是否相等，这个比对精确的前提是版本号
+  /// 单调不减——清零会打破它：依赖方手上快照是 5，清零后同一帧内恰好推进 5 次
+  /// 合并成一次通知，比对 5 == 5，那批变更被静默吞掉。库自己的两个调用点
+  /// （`onPageInit` 时还没有依赖方、`onPageReassemble` 时全树会重建重新快照）
+  /// 碰不到，但子类在运行期重新注册就有这个窗口。
   @protected
   @mustCallSuper
   void registerIds(List<T> ids) {
-    clearRegisteredIds();
     logMessage(() => '[register] ids: $ids');
-    for (final T id in ids) {
-      _versions[id] = 0;
-    }
+    final Map<T, int> next = <T, int>{
+      for (final T id in ids) id: _versions[id] ?? 0,
+    };
+    _versions
+      ..clear()
+      ..addAll(next);
     _registered = true;
   }
 
@@ -64,17 +74,17 @@ mixin FlNotifyMixin<T extends Enum> on ChangeNotifier implements FlIdVersions {
 
   /// **子类不要直接调用**，请走 [notifySingleListener] / [notifyMultiListeners]。
   ///
-  /// 直接调它会通知所有监听者，却**不推进任何 ID 的版本号**：`context.wc` 那批
-  /// 依赖方照常重建，而 `selectIds` / `FlSelector` 那批逐 ID 比对下来一律得出
-  /// 「没变」，一次都不会重建。症状是「明明发了通知，那一块就是不刷新」，
-  /// 且不报错——页面静默停在旧数据上。
+  /// 直接调它会通知所有监听者，却**不推进任何 ID 的版本号**。而依赖方全都是
+  /// 按 ID 订阅的（`FlSelector` / `FlSelectorView`），逐 ID 比对下来一律得出
+  /// 「没变」——于是这次通知一个依赖方都惊动不了。症状是「明明发了通知，界面
+  /// 就是不刷新」，且不报错——页面静默停在旧数据上。
   ///
   /// Dart 没有「把继承来的公开成员藏起来」的写法（[protected] 拦的是类层级
   /// **之外**的调用方，恰恰不拦子类），所以这里改用一道 debug 期门禁：不是经
   /// 上面两个入口进来的调用直接断言。release 构建里这道门禁会被树摇掉。
   ///
-  /// 确实只想惊动 `wc` 那半边时，仍然请走一个专门的 ID——ID 粒度是本库唯一的
-  /// 通知语义，没有第二套约定。
+  /// 确实想要「任何变更都刷新某一块」时，请专门留一个 ID，每次通知都把它一起
+  /// 列进来——ID 粒度是本库唯一的通知语义，没有第二套约定。
   ///
   /// 通知**什么时候兑现成重建**不归这一层管：那是 Widget 侧的约束（build 阶段
   /// 不能 `markNeedsBuild`），由 `FlInheritedElement` 自己推迟到本帧结束。控制器
@@ -87,10 +97,11 @@ mixin FlNotifyMixin<T extends Enum> on ChangeNotifier implements FlIdVersions {
     assert(
       _debugInBump,
       '$runtimeType 直接调用了 notifyListeners()。它不推进任何 ID 的版本号，'
-      'selectIds / FlSelector 那批依赖方比对下来一律是「没变」，一次都不会重建'
-      '——不报错，只是那一块静默停在旧数据上。请改用 '
+      'FlSelector / FlSelectorView 那批依赖方比对下来一律是「没变」，一次都不会'
+      '重建——不报错，只是那一块静默停在旧数据上。请改用 '
       'notifySingleListener(id) 或 notifyMultiListeners(const [...])；'
-      '想全量刷新就专门留一个 ID，调用方那边用 context.wc 订。',
+      '想全量刷新就专门留一个 ID，每次通知都把它一起列进来，'
+      '调用方那边用 FlSelector 订它。',
     );
     super.notifyListeners();
   }
@@ -99,7 +110,11 @@ mixin FlNotifyMixin<T extends Enum> on ChangeNotifier implements FlIdVersions {
   @protected
   @mustCallSuper
   void notifyMultiListeners(List<T> ids) {
-    if (_disposed || ids.isEmpty) return;
+    if (_disposed) {
+      logMessage(() => '[notify-after-dispose] ids: $ids');
+      return;
+    }
+    if (ids.isEmpty) return;
     logMessage(() => '[notify] ids: $ids');
     _bumpAndNotify(ids);
   }
@@ -108,7 +123,10 @@ mixin FlNotifyMixin<T extends Enum> on ChangeNotifier implements FlIdVersions {
   @protected
   @mustCallSuper
   void notifySingleListener(T id) {
-    if (_disposed) return;
+    if (_disposed) {
+      logMessage(() => '[notify-after-dispose] id: $id');
+      return;
+    }
     logMessage(() => '[notify] id: $id');
     _bumpAndNotify(<T>[id]);
   }

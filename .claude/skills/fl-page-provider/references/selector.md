@@ -13,7 +13,9 @@
 |---|---|
 | `FlSelector<E, C>(ids:, builder:, child:)` | 默认。就地包住要刷新的那一小块 |
 | `class X extends FlSelectorView<E, C>` | 这一块要独立成类、复用或想让 `const` 构造生效 |
-| `context.selectIds<E, C>([...])` | 整个 Widget 就是那一块，不值得再套一层；**必须无条件调用** |
+
+这两个是按 ID 订阅的**全部**公开入口。`context.selectIds` 已转为 `@internal`，`context.wc`
+（全量依赖）已删除——理由见本文末尾。
 
 `FlSelectorView` 的 `staticChild` 等价于 `FlSelector` 的 `child`，但它是 getter——**必须每次返回同一个
 实例**（写成 `const` 字面量，或缓存到字段）才有意义，每次 `new` 一个等于没优化。
@@ -101,24 +103,21 @@ void setName(String v) {
 
 ## 有时不显示的那一块
 
-```dart
-if (expanded) context.selectIds<E, C>(const [E.detail]);   // ✗ 依赖登记不会被清掉
-```
-
-Flutter 只在 `Element.deactivate()` 时解除依赖登记，重建时从不清理。上面这样写，一旦 `expanded`
-从 `true` 变 `false`，`E.detail` 仍留在登记表里，之后每次通知 `E.detail` 都让这个 Widget 白重建，
-直到它被卸载。两种正确写法：
+放心写在条件分支里——这正是订阅只经由 Widget 提供的好处：
 
 ```dart
-if (expanded) const DetailSection(),                        // ✓ 拆成独立 Widget，卸载即解依赖
+if (expanded) const DetailSection(),        // ✓ 内部是 FlSelector，卸载即解依赖
 
-FlSelector<E, C>(                                           // ✓ 或者无条件订阅，在内部分支
+FlSelector<E, C>(                           // ✓ 或者无条件订阅，在内部分支
   ids: const [E.detail, E.expanded],
   builder: (_, c, __) => c.expanded ? DetailBody(c.detail) : const SizedBox.shrink(),
 )
 ```
 
-第一种更省：不显示时连订阅都没有。
+第一种更省：不显示时连订阅都没有。之所以不能把订阅写成 `BuildContext` 上的方法再塞进 `if`，
+是因为 Flutter 只在 `Element.deactivate()` 时解除依赖登记、重建时从不清理——那样写一旦走了
+不调用的分支，上轮登记的 ID 就永久留在表里，这个 Widget 会一直白重建到卸载为止。`FlSelector`
+自己就是一层 Widget，条件不成立时整个卸载，依赖跟着 `deactivate()` 一起解除。
 
 ## 嵌套 selector
 
@@ -139,8 +138,27 @@ FlSelector<E, C>(
 )
 ```
 
-反过来，**同一个 Widget 里 `wc` 和 `selectIds` 混用会以 `wc` 为准**（已经全量依赖的不能再被 ID 登记
-收窄，否则 `wc` 那半边会漏通知）。想要局部就一处都别写 `wc`。
+## 要「任何变更都刷新某一块」
+
+本库没有全量依赖那一档（`context.wc` 已删除）。做法是在枚举里专门留一个全量 ID：
+
+```dart
+enum ProfileId { all, name, avatar }
+
+// 控制器侧：每次变更都把 all 一起列进去
+notifyMultiListeners(const [ProfileId.all, ProfileId.name]);
+
+// 调用方侧：和别的订阅写法完全一致
+FlSelector<ProfileId, ProfileController>(
+  ids: const [ProfileId.all],
+  builder: (_, c, __) => Text(c.name),
+)
+```
+
+这样「谁会因为什么而重建」始终写在调用点上，不必回控制器里翻。删掉 `wc` 的理由是它建立的
+全量依赖**跨帧不可逆**：全量依赖一旦登记，后续的 ID 登记不能再把它收窄（否则那半边会漏通知），
+于是一个 Widget 只要有过一次 `wc`，之后哪怕每帧都按 ID 订阅也回不到 ID 粒度，会一直跟着每一次
+通知重建直到卸载——不报错，也没有日志。
 
 ## 在 build 阶段发通知是安全的
 
@@ -154,7 +172,7 @@ FlSelector<E, C>(
 
 1. 通知的 ID 在 `shouldNotifyIds` 里吗？不在的话版本号恒为 0，比对永远「没变」。
 2. 控制器里是不是调了 `notifyListeners()`？**子类里一处都不该有它**——它不推进任何 ID 的版本号，
-   `wc` 的依赖方会重建、`selectIds` / `FlSelector` 的一个都不会。通知一律走
+   按 ID 订阅的依赖方一律得出「没变」，一个都不会重建（debug 期有门禁直接断言）。通知一律走
    `notifySingleListener` / `notifyMultiListeners`。
 3. `ids` 是不是写成了 `const []`？那是「一个 ID 都不关心」。
 

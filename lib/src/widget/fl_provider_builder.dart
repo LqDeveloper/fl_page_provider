@@ -28,6 +28,16 @@ class FlProviderBuilder<T extends FlBaseController> extends StatelessWidget {
   final bool observeAppLifecycle;
 
   /// 创建 controller 实例，只调用一次，实例由 [FlPageProvider] 托管。
+  ///
+  /// 跑在首帧 `build` 里，早于控制器的 `onPageInit`。三条约束与 `provider` 的
+  /// `create` 一致（详见 [FlPageProvider.create]）：
+  ///
+  /// - 可以 `context.rc<X>()` 读祖先控制器——不建立依赖，拿的是活实例。
+  /// - 不要用 `Theme.of` / `MediaQuery.of` 这类会建立依赖的查找：[create] 只跑
+  ///   一次，控制器会静默停在创建那一刻的旧值上。debug 期有断言拦着。
+  /// - 不要同步发通知：那时 `registerIds` 还没跑，会撞上 `FlNotifyMixin` 的断言。
+  ///
+  /// 这里只 new：初始化副作用放 `onPageInit`，拉数据这类重活放 `onPageStart`。
   final T Function(BuildContext context) create;
 
   /// 页面 UI，[controller] 即 [create] 创建出的实例。

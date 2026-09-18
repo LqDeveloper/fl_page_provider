@@ -153,6 +153,63 @@ void main() {
     expect(builds(tester, 'sel-dynamic'), afterSwitch + 1);
   });
 
+  group('控制器的生死', () {
+    /// 读一个带 key 的统计值。
+    String statOf(WidgetTester tester, String key) =>
+        tester.widget<Text>(find.byKey(ValueKey<String>(key))).data!;
+
+    testWidgets('父级反复重建：create 只跑过一次，实例也没换', (tester) async {
+      await pumpLab(tester);
+
+      expect(statOf(tester, 'own:creates'), '1');
+      final String identity = statOf(tester, 'own:identity');
+      final String parentBefore = statOf(tester, 'own:parent');
+
+      await tap(tester, '父级 setState');
+      await tap(tester, '父级 setState');
+
+      expect(
+        statOf(tester, 'own:creates'),
+        '1',
+        reason: '控制器归 Element，父级重建不重造',
+      );
+      expect(statOf(tester, 'own:identity'), identity, reason: '还是同一个实例');
+      expect(
+        statOf(tester, 'own:parent'),
+        isNot(parentBefore),
+        reason: '父级确实重建了，否则这条用例什么都没验到',
+      );
+      expect(statOf(tester, 'own:disposes'), '0');
+    });
+
+    testWidgets('卸载子树：控制器立刻 dispose；重新挂载是一个新实例', (tester) async {
+      await pumpLab(tester);
+      final String first = statOf(tester, 'own:identity');
+
+      await tap(tester, '卸载这一小块');
+
+      expect(statOf(tester, 'own:disposes'), '1', reason: 'Element 卸载时释放');
+      expect(find.text('已 dispose'), findsOneWidget);
+
+      await tap(tester, '重新挂载');
+
+      expect(statOf(tester, 'own:creates'), '2');
+      expect(
+        statOf(tester, 'own:identity'),
+        isNot(first),
+        reason: '重新挂载造的是新实例，不是把旧的捡回来',
+      );
+      expect(find.text('还活着'), findsOneWidget);
+    });
+
+    testWidgets('同类型嵌套：内层 create 里的 rc 拿到的是外层实例', (tester) async {
+      await pumpLab(tester);
+
+      expect(statOf(tester, 'nested:verdict'), contains('拿到外层实例 ✓'));
+      expect(statOf(tester, 'nested:distinct'), contains('不是同一个 ✓'));
+    });
+  });
+
   testWidgets('FlSelector 的 child 不参与重建', (tester) async {
     await pumpLab(tester);
     expect(find.text('builder 调用次数：1   (A=0)'), findsOneWidget);

@@ -1,4 +1,5 @@
 import 'package:fl_page_provider/fl_page_provider.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -81,7 +82,7 @@ void main() {
       expect(find.text('a=1'), findsOneWidget);
     });
 
-    testWidgets('通知无人认领的 c：只有 wc 重建', (WidgetTester tester) async {
+    testWidgets('通知无人认领的 c：只有订了全部 ID 的那个重建', (WidgetTester tester) async {
       late LabController controller;
       await pumpTree(
         tester,
@@ -92,7 +93,7 @@ void main() {
       controller.bumpC();
       await tester.pump();
 
-      expect(countOf('watch'), 2, reason: 'wc 不分 ID');
+      expect(countOf('watch'), 2, reason: 'c 也在它订的那批里');
       for (final String id in <String>['read', 'sel-a', 'sel-b', 'sel-ab']) {
         expect(countOf(id), 1, reason: '$id 不该被 c 惊动');
       }
@@ -163,6 +164,46 @@ void main() {
 
       await tester.pump();
       expect(countOf('sel-a'), 2, reason: '推迟一帧后照样兑现');
+    });
+
+    testWidgets('在帧外的 buildScope 里通知：同样推迟，不撞框架断言', (WidgetTester tester) async {
+      // runApp 的初次挂载就是这种 build：Timer.run → attachRootWidget →
+      // buildScope，schedulerPhase 还是 idle。只看相位会漏判，通知直接
+      // markNeedsBuild 就撞 "called during build"。这里在 pump 之外手动跑一次
+      // buildScope 复现同样的相位。
+      final GlobalKey<_FireDuringBuildState> key =
+          GlobalKey<_FireDuringBuildState>();
+      await pumpTree(
+        tester,
+        Column(
+          children: <Widget>[
+            _FireDuringBuild(key: key),
+            const _SelA(),
+          ],
+        ),
+      );
+      expect(countOf('sel-a'), 1);
+
+      key.currentState!.armSilently();
+      (key.currentContext! as Element).markNeedsBuild();
+      expect(
+        SchedulerBinding.instance.schedulerPhase,
+        SchedulerPhase.idle,
+        reason: '前提：此刻不在帧内',
+      );
+      tester.binding.buildOwner!.buildScope(tester.binding.rootElement!);
+
+      expect(
+        tester.takeException(),
+        isNull,
+        reason: 'owner.debugBuilding 已经为 true，得走推迟那条路',
+      );
+      expect(countOf('sel-a'), 1, reason: '这一轮 buildScope 里不兑现');
+
+      // 第一次 pump 跑 post-frame 回调（markNeedsBuild），第二次才真正重建。
+      await tester.pump();
+      await tester.pump();
+      expect(countOf('sel-a'), 2, reason: '推迟之后照样兑现');
     });
   });
 
@@ -265,6 +306,80 @@ void main() {
       expect(created, 1, reason: '控制器要跨父级重建活下来');
     });
 
+    testWidgets('create 抛异常：只跑一次，后续 build 不再重试', (WidgetTester tester) async {
+      int calls = 0;
+      const Key providerKey = ValueKey<String>('failing');
+
+      Future<void> pumpFailing() => tester.pumpWidget(
+        Directionality(
+          textDirection: TextDirection.ltr,
+          child: FlProviderBuilder<LabController>(
+            key: providerKey,
+            create: (_) {
+              calls++;
+              throw StateError('boom');
+            },
+            builder: (_, _) => const SizedBox.shrink(),
+          ),
+        ),
+      );
+
+      await pumpFailing();
+      expect(calls, 1);
+      expect(
+        '${tester.takeException()}',
+        contains('boom'),
+        reason: '首次原样抛 create 自己的异常，堆栈也是原始的',
+      );
+
+      // 原地重建一次同样的树。
+      await pumpFailing();
+
+      expect(calls, 1, reason: '失败是确定性的，重试只会刷屏并重复 create 里的副作用');
+      expect(
+        '${tester.takeException()}',
+        contains('不再重试'),
+        reason: '第二次抛的是说明性的 StateError，不是再跑一遍 create',
+      );
+    });
+
+    testWidgets('热重载清掉失败记录：改好的 create 会重新跑', (WidgetTester tester) async {
+      int calls = 0;
+      bool shouldFail = true;
+      const Key providerKey = ValueKey<String>('reassemble');
+
+      Future<void> pumpIt() => tester.pumpWidget(
+        Directionality(
+          textDirection: TextDirection.ltr,
+          child: FlProviderBuilder<LabController>(
+            key: providerKey,
+            create: (_) {
+              calls++;
+              if (shouldFail) throw StateError('boom');
+              return LabController();
+            },
+            builder: (_, _) => const SizedBox.shrink(),
+          ),
+        ),
+      );
+
+      await pumpIt();
+      expect(calls, 1);
+      tester.takeException();
+
+      // 「改好代码」，再热重载。
+      shouldFail = false;
+      // 走框架热重载的那条路，但不用 reassembleApplication()：它末尾是
+      // `scheduleWarmUpFrame(); await endOfFrame;`，而测试里的帧要靠 pump 驱动，
+      // 于是那个 future 永远不完成（拿一棵空树也一样卡死，与本库无关）。
+      // buildOwner.reassemble 就是框架热重载时遍历 Element 树的那一步。
+      tester.binding.buildOwner!.reassemble(tester.binding.rootElement!);
+      await tester.pump();
+
+      expect(calls, 2, reason: 'reassemble 清了失败记录，create 得以重跑');
+      expect(tester.takeException(), isNull, reason: '这次 create 成功了');
+    });
+
     testWidgets('子树销毁时控制器被 dispose', (WidgetTester tester) async {
       late LabController controller;
       await pumpTree(
@@ -280,11 +395,10 @@ void main() {
     });
   });
 
-  group('三档读取粒度', () {
-    testWidgets('rc 取到的和 wc / selectIds 是同一个实例', (WidgetTester tester) async {
+  group('读取粒度', () {
+    testWidgets('rc 取到的和按 ID 订阅拿到的是同一个实例', (WidgetTester tester) async {
       late LabController created;
       late LabController fromRc;
-      late LabController fromWc;
       late LabController fromSelect;
 
       await pumpTree(
@@ -292,7 +406,6 @@ void main() {
         Builder(
           builder: (BuildContext context) {
             fromRc = context.rc<LabController>();
-            fromWc = context.wc<LabController>();
             fromSelect = context.selectIds<LabId, LabController>(const <LabId>[
               LabId.a,
             ]);
@@ -303,7 +416,6 @@ void main() {
       );
 
       expect(identical(fromRc, created), isTrue);
-      expect(identical(fromWc, created), isTrue);
       expect(identical(fromSelect, created), isTrue);
     });
 
@@ -393,7 +505,11 @@ class _WatchProbe extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     _count('watch');
-    return Text('watch a=${context.wc<LabController>().a}');
+    // 订了全部 ID——任何一次通知都会惊动它。
+    final LabController c = context.selectIds<LabId, LabController>(
+      LabId.values,
+    );
+    return Text('watch a=${c.a}');
   }
 }
 
@@ -469,6 +585,9 @@ class _FireDuringBuildState extends State<_FireDuringBuild> {
   bool _armed = false;
 
   void arm() => setState(() => _armed = true);
+
+  /// 只置位不 setState，让用例自己决定这次 build 由谁、在什么相位触发。
+  void armSilently() => _armed = true;
 
   @override
   Widget build(BuildContext context) {

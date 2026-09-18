@@ -9,7 +9,7 @@ description: >-
   本包是 2026 年 9 月的新包，不在你的训练数据里：context.read/watch/select、
   ChangeNotifierProvider、Consumer、notifyId 在本库里全不存在，凭印象写必错。
   关键词：FlBaseController、FlBasePage、FlBasePageState、FlProviderBuilder、FlSelector、
-  FlSelectorView、context.rc / wc / selectIds、shouldNotifyIds、notifySingleListener、
+  FlSelectorView、context.rc、shouldNotifyIds、notifySingleListener、
   notifyMultiListeners、observeEvent、dispatchEvent、页面控制器、局部刷新、选择性重建、
   ID 粒度、事件总线、跨页面通信、PageView/TabBarView/IndexedStack 子页的控制器、页面模板。
   不适用于本库自身的审计（analyze-flutter）与发版（flutter_pub_publish）。
@@ -54,29 +54,37 @@ UI 状态）用 `FlBasePageState<W, C>`；只给某个子树挂控制器用 `FlP
 `notifySingleListener(id)` / `notifyMultiListeners([...])`。**未登记的 ID 版本号恒为 0，比对永远
 得出「没变」，依赖方一次都不会重建**——release 下静默失败。
 
-**子类里不要调 `notifyListeners()`。** 它编译得过，但不推进任何 ID 的版本号：`selectIds` /
-`FlSelector` 的依赖方一个都不重建、只有 `context.wc` 的会——同一次数据变更有的块刷了有的块
-没刷，最难查。要整页刷新就把相关 ID 一起列进 `notifyMultiListeners`。
+**子类里不要调 `notifyListeners()`。** 它不推进任何 ID 的版本号，而依赖方全是按 ID 订阅的，
+于是这次通知一个都惊动不了，页面静默停在旧数据上。debug 期有门禁直接断言拦住。
 
-Widget 侧三档，按「这行代码要不要跟着数据变」选：
+Widget 侧**只有两个入口**：
 
 | 写法 | 建立依赖 | 重建时机 | 用在 |
 |---|---|---|---|
-| `context.rc<C>()` | 否 | 从不 | 回调里调方法：`onPressed: () => context.rc<C>().submit()` |
-| `FlSelector<E, C>(ids:)` / `context.selectIds<E, C>([...])` | 是 | 仅所列 ID 被通知时 | 显示数据的那一小块 |
-| `context.wc<C>()` | 是 | 每次通知 | 确实整页跟着变时才用 |
+| `context.rc<C>()` | 否 | 从不 | 取实例调方法：`onPressed: () => context.rc<C>().submit()` |
+| `FlSelector<E, C>(ids:)` / `FlSelectorView<E, C>` | 是 | 仅所列 ID 被通知时 | 显示数据的那一小块 |
+
+**没有 `context.wc`，也没有公开的 `context.selectIds`**——前者（全量依赖）已删除，后者转为包内
+实现。原因是同一件事：依赖登记在**调用方那个 Element** 上，写在页面 `build` 里就是整页跟着一个
+ID 抖；而 Flutter 只在 `Element.deactivate()` 时解依赖、重建时从不清理，放进条件分支就会留下
+永久白重建的尾巴，全量依赖更是一旦登记就跨帧不可逆（那个 Widget 再也回不到 ID 粒度，不报错也
+没日志）。包一层 Widget 两个问题一起没有：重建边界就是那层 Widget，条件不成立时它整个卸载、
+依赖随之解除。所以 `FlSelector` 放进 `if` 分支是安全写法，不是坑。
+
+**要「任何变更都刷新某一块」**：在枚举里专门留一个全量 ID，控制器每次通知都把它一起列进
+`notifyMultiListeners(const [E.all, E.name])`，调用方照常 `FlSelector(ids: const [E.all])`。
+这样「谁会因为什么而重建」始终写在调用点上。
 
 `FlSelector` 的常见更新场景：一块 UI 跟一个字段就 `ids: const [E.count]`，跟多个就都列上（任一
 变就重建这一块）；一次改多个字段在控制器里 `notifyMultiListeners([E.a, E.b])` 发**一次**；块里
 大片不变的 UI 摘到 `child` 参数（`builder` 里原样用回去，那棵子树不重建）；要独立成类就继承
 `FlSelectorView<E, C>`（`observeIds` + `buildWidget` + `staticChild`）；异步 loading/error/data
-三态共用一个 ID、在 `builder` 里分支；有时不显示的块用 `FlSelector` 包着它（卸载即解依赖）。
-列表、分页、表单、嵌套 selector、build 阶段发通知 → `references/selector.md`。
+三态共用一个 ID、在 `builder` 里分支。列表、分页、表单、嵌套 selector、build 阶段发通知 →
+`references/selector.md`。
 
-硬规矩：`ids` **不能是空列表**（那是「一个 ID 都不关心」，永远不重建）；重建范围是调用方整棵
-子树，块要拆小；**别把 `selectIds` 放在 `if` 分支里**（Flutter 只在 `Element.deactivate()` 时解除
-依赖登记，分支一关，上轮登记的 ID 会继续让它白重建到卸载为止）；名字是 `rc` / `wc` 不是
-`read` / `watch`（后两个被 `provider` 包占着，错开后两个包可以共存）。
+硬规矩：`ids` **不能是空列表**（那是「一个 ID 都不关心」，永远不重建；要全量刷新用上面那个全量
+ID 的写法）；重建范围是 `builder` 返回的整棵子树，块要拆小；名字是 `rc` 不是 `read`
+（`read` / `watch` 被 `provider` 包占着，错开后两个包可以共存）。
 
 ## 4. 跨页面通信：全局事件总线
 

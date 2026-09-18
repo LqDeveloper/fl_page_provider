@@ -5,16 +5,14 @@ import 'package:fl_page_provider/src/provider/fl_inherited_widget.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-/// `FlInheritedElement` 这一层的契约：控制器上到底挂了几个 listener、什么时候
-/// 摘掉，以及控制器实例被换掉那一下——版本号快照失效，本轮必须全员重建。
+/// `FlInheritedElement` 这一层的契约：控制器由它创建与释放、控制器上到底挂了
+/// 几个 listener、什么时候摘掉。
 ///
-/// 换实例这条路径从公开 API 走不到（`FlPageProvider` 的 `create` 只跑一次，
-/// 控制器不会中途更换），所以这里直接铺一个 `FlInheritedWidget` 来驱动它。
-/// 它不是「用不上的分支」：没有它，任何将来允许换控制器的入口都会静默地把
-/// 依赖方留在旧数据上。
+/// 「换控制器实例」这条路径已经不存在了：控制器归 Element，一造出来就终身不换
+/// ——`FlInheritedWidget` 手上只有 `create`，`updateShouldNotify` 恒为 `false`，
+/// 谁都没有换实例的入口。原先为它准备的那组用例连同 `_controllerChanged` 一起
+/// 删掉了。
 void main() {
-  int countOf(String key) => _builds[key] ?? 0;
-
   setUp(_builds.clear);
 
   Widget host(Widget child) =>
@@ -64,123 +62,151 @@ void main() {
   });
 
   group('updateShouldNotify', () {
-    test('只认控制器实例本身，child 换了不算', () {
-      final _SwapController a = _SwapController();
-      final _SwapController b = _SwapController();
-      addTearDown(a.dispose);
-      addTearDown(b.dispose);
-
+    test('恒为 false：控制器归 Element，widget 侧没有可比的东西', () {
       const Widget child = SizedBox.shrink();
+      _SwapController create(BuildContext context) => _SwapController();
       final FlInheritedWidget<_SwapController> first =
-          FlInheritedWidget<_SwapController>(controller: a, child: child);
+          FlInheritedWidget<_SwapController>(create: create, child: child);
 
       expect(
         first.updateShouldNotify(
+          FlInheritedWidget<_SwapController>(create: create, child: child),
+        ),
+        isFalse,
+      );
+      expect(
+        // 连 create 都换了也一样：它在首次 build 之后再不会被调用，换与不换
+        // 对子树没有任何可观测差别。
+        first.updateShouldNotify(
           FlInheritedWidget<_SwapController>(
-            controller: a,
+            create: (BuildContext context) => _SwapController(),
             child: const Text('别的 child', textDirection: TextDirection.ltr),
           ),
         ),
         isFalse,
       );
-      expect(
-        first.updateShouldNotify(
-          FlInheritedWidget<_SwapController>(controller: b, child: child),
-        ),
-        isTrue,
-      );
     });
   });
 
-  group('换控制器实例', () {
-    testWidgets('本轮所有依赖方无条件重建——版本号两边都是 0 也一样', (WidgetTester tester) async {
-      final _SwapController first = _SwapController();
-      final _SwapController second = _SwapController()..value = 99;
-      addTearDown(first.dispose);
-      addTearDown(second.dispose);
-      final GlobalKey<_SwapHostState> key = GlobalKey<_SwapHostState>();
-
+  group('控制器的生死归 Element', () {
+    testWidgets('create 跑在 Element 的首次 build 里，拿到的 context 就是它', (
+      WidgetTester tester,
+    ) async {
+      BuildContext? seen;
       await tester.pumpWidget(
         host(
-          _SwapHost(
-            key: key,
-            initial: first,
-            child: const Column(children: <Widget>[_SelA(), _SelB()]),
+          FlProviderBuilder<_SwapController>(
+            create: (BuildContext context) {
+              seen = context;
+              return _SwapController();
+            },
+            builder: (_, _) => const _SelA(),
           ),
         ),
       );
-      expect(countOf('sel-a'), 1);
-      expect(countOf('sel-b'), 1);
 
-      key.currentState!.swap(second);
-      await tester.pump();
-
-      expect(countOf('sel-a'), 2, reason: '快照是对着旧控制器记的，跟新控制器没有可比性');
       expect(
-        countOf('sel-b'),
-        2,
-        reason: 'b 的版本号两边都是 0，逐 ID 比对会得出「没变」——必须由换实例这条路兜住',
+        seen,
+        isA<FlInheritedElement<_SwapController>>(),
+        reason: 'provider 传给 create 的同样是它自己那个 Element',
       );
-      expect(find.text('a=99'), findsOneWidget);
     });
 
-    testWidgets('listener 跟着迁移：旧实例的通知不再作数，新实例的才算', (WidgetTester tester) async {
-      final _SwapController first = _SwapController();
-      final _SwapController second = _SwapController();
-      addTearDown(first.dispose);
-      addTearDown(second.dispose);
-      final GlobalKey<_SwapHostState> key = GlobalKey<_SwapHostState>();
-
-      await tester.pumpWidget(
-        host(_SwapHost(key: key, initial: first, child: const _SelA())),
-      );
-      expect(first.listenerCount, 1);
-
-      key.currentState!.swap(second);
-      await tester.pump();
-      expect(first.listenerCount, 0);
-      expect(second.listenerCount, 1);
-      final int afterSwap = countOf('sel-a');
-
-      first.bumpA();
-      await tester.pump();
-      expect(countOf('sel-a'), afterSwap, reason: '旧控制器已经没人听了');
-
-      second.bumpA();
-      await tester.pump();
-      expect(countOf('sel-a'), afterSwap + 1);
-    });
-
-    testWidgets('换实例只让本轮全员重建，下一轮回到 ID 粒度', (WidgetTester tester) async {
-      final _SwapController first = _SwapController();
-      final _SwapController second = _SwapController();
-      addTearDown(first.dispose);
-      addTearDown(second.dispose);
-      final GlobalKey<_SwapHostState> key = GlobalKey<_SwapHostState>();
-
+    testWidgets('create 里读自己会被挡开：同类型查找跳过本层', (WidgetTester tester) async {
+      Object? error;
       await tester.pumpWidget(
         host(
-          _SwapHost(
-            key: key,
-            initial: first,
-            child: const Column(children: <Widget>[_SelA(), _SelB()]),
+          FlProviderBuilder<_SwapController>(
+            create: (BuildContext context) {
+              // 本层还在创建中。查找被 getElementForInheritedWidgetOfExactType
+              // 的覆写挡到祖先那一层，而祖先没有——所以是「找不到」，不是读到
+              // 一个半成品。
+              try {
+                context.rc<_SwapController>();
+              } catch (e) {
+                error = e;
+              }
+              return _SwapController();
+            },
+            builder: (_, _) => const _SelA(),
           ),
         ),
       );
-      key.currentState!.swap(second);
-      await tester.pump();
-      final int aAfterSwap = countOf('sel-a');
-      final int bAfterSwap = countOf('sel-b');
 
-      second.bumpA();
-      await tester.pump();
+      expect(error, isA<Error>());
+      expect('$error', contains('找不到 FlPageProvider'));
+      expect(tester.takeException(), isNull);
+    });
+  });
 
-      expect(countOf('sel-a'), aAfterSwap + 1);
-      expect(
-        countOf('sel-b'),
-        bAfterSwap,
-        reason: '_controllerChanged 是一次性的，通知完就复位',
+  group('所有权认领', () {
+    testWidgets('create 返回已 dispose 的实例：报错，且不留下认领残留', (
+      WidgetTester tester,
+    ) async {
+      final _SwapController dead = _SwapController()..dispose();
+
+      await tester.pumpWidget(
+        host(
+          FlProviderBuilder<_SwapController>(
+            create: (_) => dead,
+            builder: (_, _) => const SizedBox.shrink(),
+          ),
+        ),
       );
+
+      final Object? error = tester.takeException();
+      expect(
+        error,
+        isFlutterError,
+        reason: 'addListener 撞 debugAssertNotDisposed',
+      );
+      expect(
+        debugIsOwnedController(dead),
+        isFalse,
+        reason: '认领排在 addListener 之后：抛出来的实例不能进那张全局强引用表',
+      );
+    });
+
+    testWidgets('同一个实例交给两个 provider：断言，且 listener 只剩第一个的', (
+      WidgetTester tester,
+    ) async {
+      final _SwapController shared = _SwapController();
+      addTearDown(() {
+        if (!shared.disposed) shared.dispose();
+      });
+
+      await tester.pumpWidget(
+        host(
+          FlProviderBuilder<_SwapController>(
+            create: (_) => shared,
+            builder: (_, _) => FlProviderBuilder<_SwapController>(
+              create: (_) => shared,
+              builder: (_, _) => const SizedBox.shrink(),
+            ),
+          ),
+        ),
+      );
+
+      expect(tester.takeException(), isAssertionError);
+      expect(shared.listenerCount, 1, reason: '内层先挂了 listener 再认领失败，得把自己那个摘掉');
+      expect(debugIsOwnedController(shared), isTrue, reason: '外层的认领不受影响');
+    });
+  });
+
+  group('非法 aspect', () {
+    testWidgets('绕开公开 API 传了不是 ID 列表的 aspect：debug 期断言', (
+      WidgetTester tester,
+    ) async {
+      await tester.pumpWidget(
+        host(
+          FlProviderBuilder<_SwapController>(
+            create: (_) => _SwapController(),
+            builder: (_, _) => const _BadAspect(),
+          ),
+        ),
+      );
+
+      expect(tester.takeException(), isAssertionError);
     });
   });
 
@@ -271,30 +297,24 @@ class _SwapController extends FlBaseController<_Id> {
   }
 }
 
-/// 直接铺一个 [FlInheritedWidget]，把「换控制器实例」这条路径开出来。
+/// 直接对 Element 调 `dependOnInheritedElement`，传一个不是 `List<Enum>` 的
+/// aspect——公开 API（`FlSelector`）走不到这里，只有绕开它才写得出来。
 ///
-/// 控制器的释放不归它管（[FlPageProvider] 才管生死），由用例自己 tearDown。
-class _SwapHost extends StatefulWidget {
-  const _SwapHost({required this.initial, required this.child, super.key});
-
-  final _SwapController initial;
-  final Widget child;
-
-  @override
-  State<_SwapHost> createState() => _SwapHostState();
-}
-
-class _SwapHostState extends State<_SwapHost> {
-  late _SwapController _controller = widget.initial;
-
-  void swap(_SwapController next) => setState(() => _controller = next);
+/// 自「全量依赖」那套删掉之后，这是 `updateDependencies` 里仅剩的一条非常规分支。
+/// debug 期它断言；release 期断言被剥掉，登记退化成「没登记过」，由
+/// `notifyDependent` 的保守分支兜住（每次通知都重建）。后一半在 debug 的测试里
+/// 跑不到，所以这条用例只钉住断言这一半。
+class _BadAspect extends StatelessWidget {
+  const _BadAspect();
 
   @override
   Widget build(BuildContext context) {
-    return FlInheritedWidget<_SwapController>(
-      controller: _controller,
-      child: widget.child,
-    );
+    final InheritedElement element = context
+        .getElementForInheritedWidgetOfExactType<
+          FlInheritedWidget<_SwapController>
+        >()!;
+    context.dependOnInheritedElement(element, aspect: 'not a list');
+    return const SizedBox.shrink();
   }
 }
 
@@ -332,6 +352,10 @@ class _WatchProbe extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     _count('watch');
-    return Text('watch=${context.wc<_SwapController>().value}');
+    // 订了全部 ID——任何一次通知都会惊动它。
+    final _SwapController c = context.selectIds<_Id, _SwapController>(
+      _Id.values,
+    );
+    return Text('watch=${c.value}');
   }
 }

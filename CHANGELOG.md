@@ -10,10 +10,14 @@ Initial release.
 - `FlProviderBuilder<T>` — scope a controller to part of a subtree instead of a whole page.
 - `FlSelector<E, T>`, `FlSelectorView<E, T>` — rebuild only when the listed IDs are notified, with
   a `child` parameter that keeps the static part of the subtree out of the rebuild.
-- `context.rc` / `context.wc` / `context.selectIds` — read the controller with no dependency, with
-  a dependency on every notification, or with a dependency on specific IDs only. The names avoid
-  `read` and `watch` so this package can be imported alongside `provider` without a `hide` or an
-  import prefix.
+- `context.rc` — read the controller without creating a dependency, for calling methods from
+  callbacks. The name avoids `read` and `watch` so this package can be imported alongside
+  `provider` without a `hide` or an import prefix.
+- Rebuilding on data changes goes through `FlSelector` / `FlSelectorView` only. The underlying
+  `context.selectIds` is internal: the dependency is registered on the *calling* element, so the
+  widget boundary is what keeps the rebuild scoped and what lets the dependency go away when the
+  condition no longer holds. There is deliberately no "depend on every notification" granularity —
+  reserve an ID for that case and include it in every notification.
 - Rebuild dispatch compares version numbers per ID rather than as a combined hash, so two IDs
   changing in opposite directions cannot cancel out and drop a rebuild. Notifications raised
   during a `build` are deferred to the end of the frame instead of throwing

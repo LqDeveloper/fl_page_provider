@@ -11,8 +11,8 @@ import 'package:meta/meta.dart';
 /// 「这个 ID 现在是第几版」。本接口就是两者之间那道不带泛型的窄口子。
 ///
 /// 控制器不实现本接口时，`FlInheritedElement` 读到的版本号恒为 `0`。注意这不是
-/// 「退化成 `context.wc`」——恒等的版本号意味着比对永远得出「没变」，那些
-/// `selectIds` 依赖方**一次都不会重建**，UI 静默停在旧数据上。`FlInheritedElement`
+/// 「退化成全量刷新」——恒等的版本号意味着比对永远得出「没变」，那些
+/// `FlSelector` 依赖方**一次都不会重建**，UI 静默停在旧数据上。`FlInheritedElement`
 /// 在 debug 期对此有断言。
 @internal
 abstract interface class FlIdVersions {

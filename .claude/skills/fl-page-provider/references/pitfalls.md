@@ -10,17 +10,17 @@
 | 某一块怎么都不重建，数据明明变了 | 通知的 ID 没写进 `shouldNotifyIds`。未登记的 ID 版本号恒为 `0`，比对永远得出「没变」 | 加进 `shouldNotifyIds`，或直接 `XxxEvent.values` |
 | 整页都不刷新，`onPageInit` 里还打了日志 | 覆写 `onPageInit` 漏了 `super.onPageInit()`——ID 登记就在 super 里 | 第一行补 super |
 | 热重载之后就不刷新了，重启又好 | 覆写 `onPageReassemble` 漏了 super（重新登记在那里） | 补 super |
-| `FlSelector` 从来不重建 | `ids: const []`。空列表是「一个 ID 都不关心」，不是「不限定 ID」 | 写上真正关心的 ID；要全量刷新用 `context.wc<T>()` |
+| `FlSelector` 从来不重建 | `ids: const []`。空列表是「一个 ID 都不关心」，不是「不限定 ID」 | 写上真正关心的 ID；要全量刷新就留一个全量 ID，每次通知都带上它，这里订它 |
 | 改了数据没反应，但换个页面回来就对了 | 只改了字段没发通知 | 补 `notifySingleListener` / `notifyMultiListeners` |
-| 同一次变更，有的块刷了有的块没刷 | 控制器里调了 `notifyListeners()`。它不推进任何 ID 的版本号，`wc` 的依赖方会重建、`selectIds` / `FlSelector` 的一个都不会 | 子类里一处都别调它；要整页刷新就把相关 ID 一起列进 `notifyMultiListeners` |
+| 发了通知但一块都没刷新（debug 下直接断言） | 控制器里调了 `notifyListeners()`，它不推进任何 ID 的版本号，按 ID 订阅的依赖方一律得出「没变」 | 子类里一处都别调它；要整页刷新就留一个全量 ID，每次通知都一起列进 `notifyMultiListeners` |
 | 某个页面整个静默冻结，其它页面正常 | `create` 返回了共享实例：所有权是单向的，第一个关闭的子树把它 `dispose` 了，之后 `notifyListeners` 开头的 `if (_disposed) return;` 直接吞掉所有通知 | 每个 `create` 各 new 一个；确实要共享就把 provider 提到共同祖先上，只铺一个 |
 
 ## 重建太多
 
 | 症状 | 原因 | 改法 |
 |---|---|---|
-| 点个按钮整页闪 | 用 `context.wc<T>()` 取控制器。它是全量依赖 | 只调方法用 `rc`；要显示数据用 `selectIds` / `FlSelector` |
-| 收起某块之后，它相关的通知还在让整页重建 | `selectIds` 写在条件分支里。Flutter 只在 `Element.deactivate()` 时解除依赖登记，**重建时从不清理**，上一轮登记的 ID 会一直留到卸载 | 无条件调用，或把那块拆成独立 Widget（条件不成立时整个卸载，依赖随之解除）。`provider` 的 `context.select` 同样如此 |
+| 点个按钮整页闪 | 订阅写在页面的 `build` 里了：依赖登记在调用方那个 Element 上，整棵子树跟着重建 | 把要刷新的那一小块包进 `FlSelector`，重建边界就收到那一层 |
+| `context.wc` / `context.selectIds` 编译不过或提示 `@internal` | 这两个写法已经移除/转为包内实现（早期版本才有） | 取实例调方法用 `rc`，按 ID 订阅用 `FlSelector` / `FlSelectorView` |
 | `FlSelector` 里一大片静态 UI 跟着重建 | 静态部分写在 `builder` 里了 | 传给 `child` 参数（或 `FlSelectorView.staticChild`），并保证每次是同一个实例 |
 | 埋点重复上报 / 接口重复请求，次数随进出页面增长 | `observeEvent` 写在 `build`、`onPageResume` 这类会重复执行的地方；它不解除已有订阅 | 移到 `onPageInit`，只订阅一次 |
 | 已经移到 `onPageInit` 了还是重复 | 传的是闭包字面量。重复订阅的拦截靠回调相等来识别，闭包每次都是新对象 | 传方法引用：`observeEvent<Foo>(_onFoo)` |

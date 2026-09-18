@@ -27,12 +27,13 @@ const int kBenchFrames = 240;
 ///
 /// | 模式 | cell 的写法 | 每次通知重建几个 cell |
 /// |---|---|---|
-/// | `selectIds` | `context.selectIds([myId])` | N/8 |
-/// | `watch` | `context.wc()` | N |
+/// | `selectIds` | `FlSelector(ids: [myId])` | N/8 |
+/// | `watch` | `FlSelector(ids: BenchId.values)` | N |
 /// | `read`（基线） | `context.rc()` | 0 |
 ///
 /// `read` 那一栏是关键：它一个 cell 都不重建，量到的就是**机制本身的固定开销**
-/// ——provider 元素自己重建一次，加上 `notifyClients` 对 N 个依赖方扫一遍。
+/// ——`FlInheritedElement`（控制器就归它，整棵子树共用它挂的那一个
+/// listener）自己重建一次，加上 `notifyClients` 对 N 个依赖方扫一遍。
 /// 把它和另外两栏相减，才分得清「哪些时间花在机制上、哪些花在真正的重建上」。
 ///
 /// ## 怎么跑
@@ -97,8 +98,8 @@ class BenchController extends BasePageController<BenchId> {
 }
 
 enum BenchMode {
-  selectIds('selectIds', 'context.selectIds([myId])'),
-  watch('watch', 'context.wc()'),
+  selectIds('selectIds', 'FlSelector(ids: [myId])'),
+  watch('watch', 'FlSelector(ids: BenchId.values)'),
   read('read（基线）', 'context.rc() —— 一个 cell 都不重建');
 
   const BenchMode(this.label, this.detail);
@@ -451,8 +452,8 @@ class _PerfBenchPageState
             child: ClipRect(
               child: SingleChildScrollView(
                 // key 随模式变：换模式时整棵 cell 子树**重建**而不是原地更新。
-                // 必须这样——Flutter 只在 Element.deactivate() 时解除依赖登记，
-                // 原地更新的话上一轮（比如 watch 的全量依赖）会留在登记表里，
+                // 必须这样——从 watch（订了全部 ID）切到 read（不建依赖）时，
+                // 上一轮那批登记得连同 Element 一起卸载才会解除；原地更新的话
                 // 基线那一栏就不再是 0 重建，量出来的东西全是错的。
                 child: Wrap(
                   key: ValueKey<BenchMode>(_mode),
@@ -484,14 +485,25 @@ class BenchCell extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    BenchStats.cellBuilds++;
-    final BenchController c = switch (mode) {
-      BenchMode.selectIds => context.selectIds<BenchId, BenchController>(
-        <BenchId>[BenchId.values[slot]],
-      ),
-      BenchMode.watch => context.wc<BenchController>(),
-      BenchMode.read => context.rc<BenchController>(),
-    };
+    // read 不建立依赖，没有要圈的重建边界，直接读。
+    if (mode == BenchMode.read) {
+      BenchStats.cellBuilds++;
+      return _box(context.rc<BenchController>());
+    }
+    // 其余两档都经 FlSelector——它是按 ID 订阅的唯一公开入口。`watch` 这一档
+    // 原先用的 `context.wc` 已移除，把所有 ID 列进来与它完全等价。
+    return FlSelector<BenchId, BenchController>(
+      ids: mode == BenchMode.watch
+          ? BenchId.values
+          : <BenchId>[BenchId.values[slot]],
+      builder: (BuildContext context, BenchController c, _) {
+        BenchStats.cellBuilds++;
+        return _box(c);
+      },
+    );
+  }
+
+  Widget _box(BenchController c) {
     final int v = c.valueOf(slot);
     return Container(
       width: 22,
