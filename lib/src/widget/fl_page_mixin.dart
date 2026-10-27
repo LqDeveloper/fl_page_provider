@@ -25,7 +25,7 @@ mixin FlPageMixin<T extends FlBaseController> {
       observeAppLifecycle: observeAppLifecycle,
       observePageIndex: observePageIndex,
       create: createController,
-      builder: (cxt, controller) => buildWithController(cxt, controller),
+      builder: buildWithController,
     );
   }
 

@@ -56,21 +56,8 @@ class FlSelector<E extends Enum, T extends FlBaseController<E>>
 
   @override
   Widget build(BuildContext context) {
-    final T controller = context.selectIds<E, T>(ids);
-    // 空列表必须单独拦：下面那道 every() 对空集合返回 true（空真值），
-    // 挡不住它。而 ids: const [] 看着像「不限定 ID」，实际是「一个都不关心」。
-    assert(
-      ids.isNotEmpty,
-      '$T: FlSelector 的 ids 是空列表。空列表不是「不限定 ID」，而是「一个 ID 都'
-      '不关心」——本组件永远不会重建。要跟着控制器全量刷新，请在 shouldNotifyIds '
-      '里专门留一个「全量」ID，每次通知都把它一起列进 notifyMultiListeners，'
-      '这里订它。',
-    );
-    assert(
-      ids.every(controller.isRegistered),
-      '$T: ids $ids 中包含未注册的 id——请把它们放进 shouldNotifyIds。'
-      '未注册的 id 版本号恒为 0，永远不会触发重建。',
-    );
-    return builder(context, controller, child);
+    // 空列表与未注册 ID 的两道断言都在 context.selectIds 里（后者会把缺的
+    // ID 逐个列出来），这里不再重复：之前这两道排在它之后，永远轮不到。
+    return builder(context, context.selectIds<E, T>(ids), child);
   }
 }

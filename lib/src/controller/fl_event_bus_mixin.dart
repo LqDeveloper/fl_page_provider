@@ -31,10 +31,12 @@ mixin FlEventBusMixin on ChangeNotifier {
 
   bool _disposed = false;
 
-  /// [T] 类型事件的原始流，**订阅不受本 mixin 管理**，需自行 cancel。
-  /// 只想拿事件、不想管释放，请用 [observeEvent]。
-  @protected
-  Stream<T> onEvent<T>() {
+  /// [T] 类型事件的原始流，只给 [observeEvent] 用。
+  ///
+  /// 私有而不开给子类：这条流上的订阅不进 `_subscriptions`，谁 listen 谁负责
+  /// cancel——忘了的话控制器会被回调闭包挂在全局总线上，页面销毁也回收不掉。
+  /// 与 `fl_page_lifecycle` 的 `FlStateEventBusMixin._on` 保持一致。
+  Stream<T> _on<T>() {
     return FlGlobalEventBus.observeEvent<T>();
   }
 
@@ -63,7 +65,7 @@ mixin FlEventBusMixin on ChangeNotifier {
       );
       return;
     }
-    _subscriptions.add(onEvent<T>().listen(onData));
+    _subscriptions.add(_on<T>().listen(onData));
   }
 
   /// 向全局总线发布一个 [T] 类型的事件。

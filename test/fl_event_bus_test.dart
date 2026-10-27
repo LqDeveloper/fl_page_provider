@@ -1,5 +1,3 @@
-import 'dart:async';
-
 import 'package:fl_page_provider/fl_page_provider.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -126,25 +124,6 @@ void main() {
 
       expect(first.received, <String>['login:both']);
       expect(second.received, <String>['login:both', 'login:only-second']);
-    });
-
-    test('onEvent 的原始流不归 mixin 管，dispose 之后照样在收', () async {
-      final _Sender sender = _Sender();
-      addTearDown(sender.dispose);
-      final _Receiver receiver = _Receiver();
-      final List<String> raw = <String>[];
-      final StreamSubscription<_Login> sub = receiver.rawLoginStream().listen(
-        (_Login e) => raw.add(e.name),
-      );
-      addTearDown(sub.cancel);
-
-      receiver.dispose();
-      sender.send(const _Login('raw'));
-      await pumpEventQueue();
-
-      expect(raw, <String>[
-        'raw',
-      ], reason: '这正是 onEvent 与 observeEvent 的区别：它要自己 cancel');
     });
   });
 
@@ -314,8 +293,6 @@ class _Receiver extends FlBaseController<_Id> {
     observeEvent<_Login>(_handleAny);
     observeEvent<_Logout>(_handleAny);
   }
-
-  Stream<_Login> rawLoginStream() => onEvent<_Login>();
 
   void send(_Login event) => dispatchEvent<_Login>(event);
 
